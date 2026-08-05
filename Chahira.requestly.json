@@ -1,0 +1,1867 @@
+{
+  "meta": {
+    "version": "1.1.0",
+    "exportedAt": "2026-06-27T09:34:45.242Z",
+    "exportedUsing": "Requestly API Client"
+  },
+  "records": [
+    {
+      "id": "48e2e49d-c030-4439-9217-d9ef70cc805e",
+      "name": "Chahira",
+      "description": "",
+      "type": "collection",
+      "parentId": null,
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "bearer_token",
+          "token": "{{access_token}}"
+        },
+        "variables": {
+          "base_url": {
+            "id": "9ff4d62e-1701-4e17-801b-20a383cc0b34",
+            "syncValue": "http://127.0.0.1:8000",
+            "localValue": "",
+            "type": "string",
+            "isPersisted": true,
+            "isEnabled": true,
+            "rank": "hmqrn2tsk",
+            "createdBy": "802df71f-ef21-41e5-ae66-1b64543ee995",
+            "updatedBy": "802df71f-ef21-41e5-ae66-1b64543ee995",
+            "createdAt": "2026-06-24T05:38:23.856Z",
+            "updatedAt": "2026-06-24T06:29:57.457Z"
+          }
+        },
+        "scripts": {
+          "preRequest": "// Pre-request Script\nconst token = rq.environment.get(\"access_token\");\nif (token) {\n    rq.request.headers[\"Authorization\"] = \"Bearer \" + token;\n}\n"
+        }
+      },
+      "rank": "a0"
+    },
+    {
+      "id": "c7056017-68da-4783-b473-7be39ee69689",
+      "name": "Auth",
+      "description": "",
+      "type": "collection",
+      "parentId": "6ec0a889-3a78-4b08-8410-06b0584dbda1",
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "Zz"
+    },
+    {
+      "id": "bc1312fd-2170-45fd-91b3-2a1c2a0eb709",
+      "name": "sign up",
+      "type": "api",
+      "parentId": "c7056017-68da-4783-b473-7be39ee69689",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/auth/signup/",
+          "method": "POST",
+          "headers": [
+            {
+              "id": 1782279368440035,
+              "key": "",
+              "value": "",
+              "isEnabled": false,
+              "description": ""
+            }
+          ],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "rawContentType": "application/json",
+            "raw": "{\n  \"email\": \"jamilhossain3251@gmail.com\",\n  \"password\": \"Pass@123\"\n}\n"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a0"
+    },
+    {
+      "id": "4b24a867-1edb-4216-bd18-a2cf552c4421",
+      "name": "verify otp",
+      "type": "api",
+      "parentId": "c7056017-68da-4783-b473-7be39ee69689",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/auth/verify-otp/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "raw": "{\n  \"email\": \"jamilhossain3251@gmail.com\",\n  \"otp\": \"9394\"\n}\n",
+            "rawContentType": "application/json"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        },
+        "scripts": {
+          "postResponse": "// Post-response Script\nconst responseData = rq.response.json();\n\nif (responseData.access) {\n    rq.environment.set(\"access_token\", responseData.access);\n    console.log(\"Access Token saved to environment\");\n}\nif (responseData.refresh) {\n    rq.environment.set(\"refresh_token\", responseData.refresh);\n    console.log(\"Refresh Token saved to environment\");\n}\n"
+        }
+      },
+      "rank": "a1"
+    },
+    {
+      "id": "1e53c5e7-0559-43bc-969f-ebfa29658af7",
+      "name": "check username availability",
+      "type": "api",
+      "parentId": "c7056017-68da-4783-b473-7be39ee69689",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/auth/check-username/?username=jamil",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [
+            {
+              "id": 1,
+              "key": "username",
+              "value": "jamil",
+              "isEnabled": true
+            }
+          ],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a3"
+    },
+    {
+      "id": "c3948b94-e63f-4bb6-8110-d76892759fba",
+      "name": "profile onboarding",
+      "description": "Consolidated endpoint to update all onboarding steps (Demographics, Habits, Qualities, Interests, Recharges) AND upload profile pictures simultaneously in a single FormData payload.",
+      "type": "api",
+      "parentId": "c7056017-68da-4783-b473-7be39ee69689",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/profile/me/",
+          "method": "PUT",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "multipart/form-data",
+            "formData": [
+              {
+                "id": 0,
+                "key": "username",
+                "type": "text",
+                "value": "SamWander",
+                "isEnabled": true
+              },
+              {
+                "id": 1,
+                "key": "age",
+                "type": "text",
+                "value": "25",
+                "isEnabled": true
+              },
+              {
+                "id": 2,
+                "key": "height_cm",
+                "type": "text",
+                "value": "175",
+                "isEnabled": true
+              },
+              {
+                "id": 3,
+                "key": "weight_kg",
+                "type": "text",
+                "value": "70",
+                "isEnabled": true
+              },
+              {
+                "id": 4,
+                "key": "gender",
+                "type": "text",
+                "value": "woman",
+                "isEnabled": true
+              },
+              {
+                "id": 5,
+                "key": "marital_status",
+                "type": "text",
+                "value": "single",
+                "isEnabled": true
+              },
+              {
+                "id": 6,
+                "key": "education_level",
+                "type": "text",
+                "value": "Bachelors Degree",
+                "isEnabled": true
+              },
+              {
+                "id": 7,
+                "key": "spoken_languages",
+                "type": "text",
+                "value": "English, ASL",
+                "isEnabled": true
+              },
+              {
+                "id": 8,
+                "key": "city",
+                "type": "text",
+                "value": "London",
+                "isEnabled": true
+              },
+              {
+                "id": 9,
+                "key": "country",
+                "type": "text",
+                "value": "UK",
+                "isEnabled": true
+              },
+              {
+                "id": 10,
+                "key": "looking_for",
+                "type": "text",
+                "value": "friendship",
+                "isEnabled": true
+              },
+              {
+                "id": 11,
+                "key": "has_children",
+                "type": "text",
+                "value": "false",
+                "isEnabled": true
+              },
+              {
+                "id": 12,
+                "key": "wants_children",
+                "type": "text",
+                "value": "false",
+                "isEnabled": true
+              },
+              {
+                "id": 13,
+                "key": "smoking",
+                "type": "text",
+                "value": "false",
+                "isEnabled": true
+              },
+              {
+                "id": 14,
+                "key": "alcohol",
+                "type": "text",
+                "value": "false",
+                "isEnabled": true
+              },
+              {
+                "id": 15,
+                "key": "pets",
+                "type": "text",
+                "value": "true",
+                "isEnabled": true
+              },
+              {
+                "id": 16,
+                "key": "sport",
+                "type": "text",
+                "value": "Moderate",
+                "isEnabled": true
+              },
+              {
+                "id": 17,
+                "key": "eating_habits",
+                "type": "text",
+                "value": "Balanced",
+                "isEnabled": true
+              },
+              {
+                "id": 18,
+                "key": "qualities",
+                "type": "text",
+                "value": "[\"Authenticity\", \"Loyalty\", \"Reliability\"]",
+                "isEnabled": true
+              },
+              {
+                "id": 19,
+                "key": "interests",
+                "type": "text",
+                "value": "Coding, Math, Patterns",
+                "isEnabled": true
+              },
+              {
+                "id": 20,
+                "key": "recharge_methods",
+                "type": "text",
+                "value": "Silence, Cocoon Spaces",
+                "isEnabled": true
+              },
+              {
+                "id": 21,
+                "key": "exhaust_triggers",
+                "type": "text",
+                "value": "[\"Bright lights\", \"Loud noises\"]",
+                "isEnabled": true
+              },
+              {
+                "id": 22,
+                "key": "emotional_needs",
+                "type": "text",
+                "value": "[\"Predictability\", \"Clear communication\"]",
+                "isEnabled": true
+              },
+              {
+                "id": 23,
+                "key": "second_degree_humor",
+                "type": "text",
+                "value": "true",
+                "isEnabled": true
+              },
+              {
+                "id": 24,
+                "key": "soothe_methods",
+                "type": "text",
+                "value": "[\"Silence or soft sounds\", \"Chosen solitude\"]",
+                "isEnabled": true
+              },
+              {
+                "id": 25,
+                "key": "photo1",
+                "type": "file",
+                "value": [
+                  {
+                    "id": "photo-1781633237528-d19707220264.avif-1782280027134",
+                    "name": "photo-1781633237528-d19707220264.avif",
+                    "path": "/Users/jamil/Desktop/chahira/photo-1781633237528-d19707220264.avif",
+                    "size": 266564,
+                    "type": "reference",
+                    "source": "desktop"
+                  }
+                ],
+                "isEnabled": true
+              },
+              {
+                "id": 26,
+                "key": "photo2",
+                "type": "file",
+                "value": [
+                  {
+                    "id": "photo-1781633237528-d19707220264.avif-1782280030467",
+                    "name": "photo-1781633237528-d19707220264.avif",
+                    "path": "/Users/jamil/Desktop/chahira/photo-1781633237528-d19707220264.avif",
+                    "size": 266564,
+                    "type": "reference",
+                    "source": "desktop"
+                  }
+                ],
+                "isEnabled": true
+              },
+              {
+                "id": 1782279707405145,
+                "key": "photo3",
+                "type": "file",
+                "value": [
+                  {
+                    "id": "photo-1781633237528-d19707220264.avif-1782280033727",
+                    "name": "photo-1781633237528-d19707220264.avif",
+                    "path": "/Users/jamil/Desktop/chahira/photo-1781633237528-d19707220264.avif",
+                    "size": 266564,
+                    "type": "reference",
+                    "source": "desktop"
+                  }
+                ],
+                "isEnabled": true
+              }
+            ]
+          },
+          "contentType": "multipart/form-data"
+        },
+        "auth": {
+          "type": "bearer_token",
+          "token": "{{access_token}}"
+        }
+      },
+      "rank": "a4"
+    },
+    {
+      "id": "55f4ee1c-e5c9-4bfd-af8a-6e04640fc303",
+      "name": "sign in",
+      "type": "api",
+      "parentId": "c7056017-68da-4783-b473-7be39ee69689",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/auth/login/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "rawContentType": "application/json",
+            "raw": "{\n  \"email\": \"alex@example.com\",\n  \"password\": \"UserPassword123!\"\n}\n"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        },
+        "scripts": {
+          "preRequest": "",
+          "postResponse": "// Post-response Script\nconst responseData = rq.response.json();\n\nif (responseData.access) {\n    rq.environment.set(\"access_token\", responseData.access);\n    console.log(\"Access Token saved to environment\");\n}\nif (responseData.refresh) {\n    rq.environment.set(\"refresh_token\", responseData.refresh);\n    console.log(\"Refresh Token saved to environment\");\n}\n"
+        }
+      },
+      "rank": "a0V"
+    },
+    {
+      "id": "c3529048-45bc-42f1-8ddd-c4a72ee2c611",
+      "name": "token refresh",
+      "type": "api",
+      "parentId": "c7056017-68da-4783-b473-7be39ee69689",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/auth/token/refresh/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "rawContentType": "application/json",
+            "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}\n"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a5"
+    },
+    {
+      "id": "83ae11f5-d9df-4454-aae4-1171acf45b40",
+      "name": "face verify",
+      "type": "api",
+      "parentId": "c7056017-68da-4783-b473-7be39ee69689",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/auth/face-verify/",
+          "method": "POST",
+          "headers": [
+            {
+              "id": 1782282459271184,
+              "key": "",
+              "value": "",
+              "isEnabled": true,
+              "description": ""
+            }
+          ],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "multipart/form-data",
+            "formData": [
+              {
+                "id": 1782282363153183,
+                "key": "selfie",
+                "value": [
+                  {
+                    "type": "reference",
+                    "id": "images.jpeg-1782282665444",
+                    "name": "images.jpeg",
+                    "path": "/Users/jamil/Downloads/images.jpeg",
+                    "size": 8360,
+                    "source": "desktop"
+                  }
+                ],
+                "isEnabled": true,
+                "type": "file"
+              }
+            ]
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a6"
+    },
+    {
+      "id": "69817910-f8ba-4aa4-85cb-713e7564eae6",
+      "name": "Matches",
+      "description": "",
+      "type": "collection",
+      "parentId": "6ec0a889-3a78-4b08-8410-06b0584dbda1",
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "ZzV"
+    },
+    {
+      "id": "6ff62f2a-3aea-401b-96ee-73351583a8bf",
+      "name": "Friends",
+      "description": "",
+      "type": "collection",
+      "parentId": "6ec0a889-3a78-4b08-8410-06b0584dbda1",
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "Zzl"
+    },
+    {
+      "id": "eacf75ed-ea33-41b0-ab5e-6cbf5ebcf544",
+      "name": "Community",
+      "description": "",
+      "type": "collection",
+      "parentId": "6ec0a889-3a78-4b08-8410-06b0584dbda1",
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "Zzt"
+    },
+    {
+      "id": "a86a271f-d8d5-4159-9776-da28e2b2b26e",
+      "name": "Messages",
+      "description": "",
+      "type": "collection",
+      "parentId": "6ec0a889-3a78-4b08-8410-06b0584dbda1",
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a0"
+    },
+    {
+      "id": "38e7cbc0-01e3-46c2-94c1-88d9d37b0102",
+      "name": "Your mutual matches",
+      "type": "api",
+      "parentId": "69817910-f8ba-4aa4-85cb-713e7564eae6",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/matching/perfect-match/?age_min=24&age_max=35&gender=woman&height_min=165&marital_status=single&spoken_languages=english,spanish&looking_for=friendship&education_level=masters&smoking=false&alcohol=false&sport=moderate&interests=gaming,art&recharge_methods=silence&exhaust_triggers=absorbs%20other%20people%27s%20moods&emotional_needs=predictability&second_degree_humor=true&soothe_methods=predictability,clear%20communication,hyperfocus%20on%20an%20interest ",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [
+            {
+              "id": 1,
+              "key": "age_min",
+              "value": "24",
+              "isEnabled": true
+            },
+            {
+              "id": 2,
+              "key": "age_max",
+              "value": "35",
+              "isEnabled": true
+            },
+            {
+              "id": 3,
+              "key": "gender",
+              "value": "woman",
+              "isEnabled": true
+            },
+            {
+              "id": 4,
+              "key": "height_min",
+              "value": "165",
+              "isEnabled": true
+            },
+            {
+              "id": 5,
+              "key": "marital_status",
+              "value": "single",
+              "isEnabled": true
+            },
+            {
+              "id": 6,
+              "key": "spoken_languages",
+              "value": "english,spanish",
+              "isEnabled": true
+            },
+            {
+              "id": 7,
+              "key": "looking_for",
+              "value": "friendship",
+              "isEnabled": true
+            },
+            {
+              "id": 8,
+              "key": "education_level",
+              "value": "masters",
+              "isEnabled": true
+            },
+            {
+              "id": 9,
+              "key": "smoking",
+              "value": "false",
+              "isEnabled": true
+            },
+            {
+              "id": 10,
+              "key": "alcohol",
+              "value": "false",
+              "isEnabled": true
+            },
+            {
+              "id": 11,
+              "key": "sport",
+              "value": "moderate",
+              "isEnabled": true
+            },
+            {
+              "id": 12,
+              "key": "interests",
+              "value": "gaming,art",
+              "isEnabled": true
+            },
+            {
+              "id": 13,
+              "key": "recharge_methods",
+              "value": "silence",
+              "isEnabled": true
+            },
+            {
+              "id": 14,
+              "key": "exhaust_triggers",
+              "value": "absorbs other people's moods",
+              "isEnabled": true
+            },
+            {
+              "id": 15,
+              "key": "emotional_needs",
+              "value": "predictability",
+              "isEnabled": true
+            },
+            {
+              "id": 16,
+              "key": "second_degree_humor",
+              "value": "true",
+              "isEnabled": true
+            },
+            {
+              "id": 17,
+              "key": "soothe_methods",
+              "value": "predictability,clear communication,hyperfocus on an interest ",
+              "isEnabled": true
+            }
+          ],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a0"
+    },
+    {
+      "id": "de64dd47-dbf3-4d88-ad1f-6e09cab4029b",
+      "name": "save profile",
+      "type": "api",
+      "parentId": "69817910-f8ba-4aa4-85cb-713e7564eae6",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/matching/<target_profile_id>/save/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a1"
+    },
+    {
+      "id": "853e0150-9633-4478-8156-3d7336a4758e",
+      "name": "unsave profile",
+      "type": "api",
+      "parentId": "69817910-f8ba-4aa4-85cb-713e7564eae6",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/matching/<target_profile_id>/unsave/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a2"
+    },
+    {
+      "id": "e1d3a272-ab8b-42f5-9e91-873e28d24669",
+      "name": "list saved matches",
+      "type": "api",
+      "parentId": "69817910-f8ba-4aa4-85cb-713e7564eae6",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/matching/saved",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a3"
+    },
+    {
+      "id": "aee9ebeb-e7f3-40e7-8e38-71df88d71715",
+      "name": "Card swipe left right",
+      "type": "api",
+      "parentId": "69817910-f8ba-4aa4-85cb-713e7564eae6",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/matching/<target_profile_id>/action/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "rawContentType": "application/json",
+            "raw": "// // swipe to right\n// {\n//   \"action\": \"liked\"\n// }\n\n// // swipe to left\n// {\n//   \"action\": \"disliked\"\n// }\n"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a4"
+    },
+    {
+      "id": "7901af60-e131-4515-af6f-670dbaceb38e",
+      "name": "get profile data",
+      "type": "api",
+      "parentId": "6ec0a889-3a78-4b08-8410-06b0584dbda1",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/profile/me/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a1"
+    },
+    {
+      "id": "3910d6d9-c615-4841-bd44-fb4faf0688a1",
+      "name": "friend suggestions",
+      "type": "api",
+      "parentId": "6ff62f2a-3aea-401b-96ee-73351583a8bf",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/friends/suggestions/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a0"
+    },
+    {
+      "id": "1e08679d-32ac-4a48-9c57-b95f58360600",
+      "name": "pending friend requests",
+      "type": "api",
+      "parentId": "6ff62f2a-3aea-401b-96ee-73351583a8bf",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/friends/requests/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a1"
+    },
+    {
+      "id": "2076ca7d-85ec-4ed9-9096-2d97c2abc12a",
+      "name": "accept friend request",
+      "type": "api",
+      "parentId": "6ff62f2a-3aea-401b-96ee-73351583a8bf",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/friends/<friendship_id>/accept/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a2"
+    },
+    {
+      "id": "51fdf518-7e17-4638-a778-ffb9480c69a2",
+      "name": "decline friend request",
+      "type": "api",
+      "parentId": "6ff62f2a-3aea-401b-96ee-73351583a8bf",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/friends/<friendship_id>/decline/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a3"
+    },
+    {
+      "id": "83d7964c-aa4f-495d-94c8-ee4c82f7eb79",
+      "name": "send friend request",
+      "type": "api",
+      "parentId": "6ff62f2a-3aea-401b-96ee-73351583a8bf",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/friends/send_request/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "rawContentType": "application/json",
+            "raw": "{\n  \"user_id\": 12\n}"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a4"
+    },
+    {
+      "id": "896505f6-6c25-43cd-ae66-b40792edb333",
+      "name": "search people",
+      "type": "api",
+      "parentId": "6ff62f2a-3aea-401b-96ee-73351583a8bf",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/friends/suggestions/?search=Marcus&age_min=18&age_max=45&gender=man",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [
+            {
+              "id": 1,
+              "key": "search",
+              "value": "Marcus",
+              "isEnabled": true
+            },
+            {
+              "id": 2,
+              "key": "age_min",
+              "value": "18",
+              "isEnabled": true
+            },
+            {
+              "id": 3,
+              "key": "age_max",
+              "value": "45",
+              "isEnabled": true
+            },
+            {
+              "id": 4,
+              "key": "gender",
+              "value": "man",
+              "isEnabled": true
+            }
+          ],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a5"
+    },
+    {
+      "id": "2705998b-af77-4a49-9932-94aee36a5ce5",
+      "name": "profile details",
+      "type": "api",
+      "parentId": "6ff62f2a-3aea-401b-96ee-73351583a8bf",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/profiles/12/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a6"
+    },
+    {
+      "id": "e1469087-fa99-40cf-aea4-712c200a7116",
+      "name": "list community rooms",
+      "type": "api",
+      "parentId": "eacf75ed-ea33-41b0-ab5e-6cbf5ebcf544",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/chat/rooms/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a0"
+    },
+    {
+      "id": "20055818-1773-4738-bde1-c3ca51a7ea1c",
+      "name": "search community room",
+      "type": "api",
+      "parentId": "eacf75ed-ea33-41b0-ab5e-6cbf5ebcf544",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/chat/rooms/?search=<query>",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [
+            {
+              "id": 1,
+              "key": "search",
+              "value": "<query>",
+              "isEnabled": true
+            }
+          ],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a1"
+    },
+    {
+      "id": "2143a8f2-b5e1-4d89-b0c6-97dfbf633a17",
+      "name": "join room",
+      "type": "api",
+      "parentId": "eacf75ed-ea33-41b0-ab5e-6cbf5ebcf544",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/chat/rooms/<room_id>/join/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a2"
+    },
+    {
+      "id": "327aafb4-5c07-46a0-834b-7d04d7356d1c",
+      "name": "leave room",
+      "type": "api",
+      "parentId": "eacf75ed-ea33-41b0-ab5e-6cbf5ebcf544",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/chat/rooms/<room_id>/leave/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a3"
+    },
+    {
+      "id": "828d36c9-f863-4237-b274-b92865cb7093",
+      "name": "get room chat messages",
+      "type": "api",
+      "parentId": "eacf75ed-ea33-41b0-ab5e-6cbf5ebcf544",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/chat/rooms/<room_id>/messages/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a4"
+    },
+    {
+      "id": "845cc5ae-3810-462d-ae38-3c676dfe7d13",
+      "name": "send message to room",
+      "type": "api",
+      "parentId": "eacf75ed-ea33-41b0-ab5e-6cbf5ebcf544",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/chat/rooms/<room_id>/send/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "rawContentType": "application/json",
+            "raw": "{\n  \"content\": \"I like this approach 👍\"\n}"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a5"
+    },
+    {
+      "id": "f6fb4eb2-bcb9-4841-b6f7-fea80fee3c04",
+      "name": "dating",
+      "type": "api",
+      "parentId": "a86a271f-d8d5-4159-9776-da28e2b2b26e",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/messages/threads/?type=dating",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [
+            {
+              "id": 1,
+              "key": "type",
+              "value": "dating",
+              "isEnabled": true
+            }
+          ],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a0"
+    },
+    {
+      "id": "e948ec64-a073-472d-861b-3ff25b96ad97",
+      "name": "get messages between them",
+      "type": "api",
+      "parentId": "a86a271f-d8d5-4159-9776-da28e2b2b26e",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/chat/direct/history/<recipient_profile_id>/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a1"
+    },
+    {
+      "id": "db6ae6a7-204a-4540-b2f3-6e9de17d973e",
+      "name": "likes sent",
+      "type": "api",
+      "parentId": "6ec0a889-3a78-4b08-8410-06b0584dbda1",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/matching/likes-sent/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a2"
+    },
+    {
+      "id": "a8d9621b-98fc-4187-b2ef-2eb39346050a",
+      "name": "likes received",
+      "type": "api",
+      "parentId": "6ec0a889-3a78-4b08-8410-06b0584dbda1",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/matching/likes-received/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a3"
+    },
+    {
+      "id": "6ec0a889-3a78-4b08-8410-06b0584dbda1",
+      "name": "App",
+      "description": "",
+      "type": "collection",
+      "parentId": "48e2e49d-c030-4439-9217-d9ef70cc805e",
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a9"
+    },
+    {
+      "id": "5e289e1d-e841-4ac2-9cbc-97829f24516b",
+      "name": "Dashboard",
+      "description": "",
+      "type": "collection",
+      "parentId": "48e2e49d-c030-4439-9217-d9ef70cc805e",
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "aA"
+    },
+    {
+      "id": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "name": "Super admin",
+      "description": "",
+      "type": "collection",
+      "parentId": "5e289e1d-e841-4ac2-9cbc-97829f24516b",
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a0"
+    },
+    {
+      "id": "a16ec824-b9e9-4826-b763-0625db537efd",
+      "name": "Moderator",
+      "description": "",
+      "type": "collection",
+      "parentId": "5e289e1d-e841-4ac2-9cbc-97829f24516b",
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a1"
+    },
+    {
+      "id": "52d2f3b5-7588-4a88-8010-62be11bc7d7f",
+      "name": "Admin",
+      "description": "",
+      "type": "collection",
+      "parentId": "5e289e1d-e841-4ac2-9cbc-97829f24516b",
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a0V"
+    },
+    {
+      "id": "8627563c-047f-4d42-9cf1-81de69920f88",
+      "name": "Support",
+      "description": "",
+      "type": "collection",
+      "parentId": "5e289e1d-e841-4ac2-9cbc-97829f24516b",
+      "deleted": false,
+      "data": {
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a2"
+    },
+    {
+      "id": "861dbfe7-895f-4541-80dd-ac50a7c3ae4b",
+      "name": "System Statistics Dashboard",
+      "description": "Returns site-wide counts of total users, active premium subscriptions, pending verifications, unresolved safety reports, and total platform revenue.",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}api/admin/dashboard/stats/",
+          "method": "GET",
+          "headers": [
+            {
+              "id": 0,
+              "key": "Authorization",
+              "value": "Bearer {{access_token}}",
+              "isEnabled": true
+            }
+          ],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a4"
+    },
+    {
+      "id": "797f9432-c3d0-4524-8577-484d331c5667",
+      "name": "Master User List",
+      "description": "Returns a directory of all user profiles registered on the platform.",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/admin/users/?search=alex",
+          "method": "GET",
+          "headers": [
+            {
+              "id": 0,
+              "key": "Authorization",
+              "value": "Bearer {{access_token}}",
+              "isEnabled": true
+            }
+          ],
+          "queryParams": [
+            {
+              "id": 0,
+              "key": "search",
+              "value": "alex",
+              "isEnabled": true,
+              "description": "Search keyword for username or email"
+            }
+          ],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a5"
+    },
+    {
+      "id": "dc4b52dc-deea-4b48-b827-70334e6726e6",
+      "name": "List Pending Photo Verifications",
+      "description": "Returns a list of all user profiles awaiting photo selfie validation.",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "http://127.0.0.1:8000/api/admin/verifications/",
+          "method": "GET",
+          "headers": [
+            {
+              "id": 0,
+              "key": "Authorization",
+              "value": "Bearer {{access_token}}",
+              "isEnabled": true
+            }
+          ],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a7"
+    },
+    {
+      "id": "332eadd1-b7aa-46f7-9d80-17aa331b461d",
+      "name": "Approve / Reject Photo Verification",
+      "description": "Approves or rejects a photo verification selfie. Body action parameter must be 'approve' or 'reject'.",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "http://127.0.0.1:8000/api/admin/verifications/1/action/",
+          "method": "POST",
+          "headers": [
+            {
+              "id": 0,
+              "key": "Authorization",
+              "value": "Bearer {{access_token}}",
+              "isEnabled": true
+            },
+            {
+              "id": 1,
+              "key": "Content-Type",
+              "value": "application/json",
+              "isEnabled": true
+            }
+          ],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "raw": "{\n  \"action\": \"approve\"\n}",
+            "rawContentType": "text/plain"
+          },
+          "contentType": "raw"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a6"
+    },
+    {
+      "id": "ef336bef-a828-4b93-92c1-f58ee0e75776",
+      "name": "login",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/auth/login/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "rawContentType": "application/json",
+            "raw": "{\n  \"email\": \"alex@example.com\",\n  \"password\": \"yourpassword\"\n}\n"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a0"
+    },
+    {
+      "id": "09f4d5ff-9a60-4b31-8208-0031e10a6273",
+      "name": "reset password",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/auth/forgot-password/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "rawContentType": "application/json",
+            "raw": "{\n  \"email\": \"alex@example.com\"\n}\n"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a1"
+    },
+    {
+      "id": "75090494-1e72-401b-85e1-05be135a6bbb",
+      "name": "otp verifications",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/auth/reset-password/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "rawContentType": "application/json",
+            "raw": "{\n  \"email\": \"alex@example.com\",\n  \"code\": \"824796\",\n  \"new_password\": \"NewSuperPassword123!\"\n}"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a2"
+    },
+    {
+      "id": "eba084e2-a835-47bf-aa27-fef911333e9e",
+      "name": "resend otp",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "https://backend.requestly.com/echo",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a3"
+    },
+    {
+      "id": "7c39ff0d-2ac6-439e-9172-1f3edc9e7124",
+      "name": "matches",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/admin/matches/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a8"
+    },
+    {
+      "id": "f6bfbbc5-33ce-47de-9cb3-2d5360dfd83e",
+      "name": "subscriptions",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/admin/subscriptions/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a9"
+    },
+    {
+      "id": "cc492612-4c55-426b-b170-773957109fd4",
+      "name": "payments",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/admin/payments/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "aA"
+    },
+    {
+      "id": "62f26e00-96b4-4a29-8c5c-45a44cbd55b5",
+      "name": "reports",
+      "type": "api",
+      "parentId": "845ca4ac-aa4c-4092-8ea7-3dede03e298a",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/admin/reports/dashboard/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "aB"
+    },
+    {
+      "id": "23b9dbd0-55bb-4eaf-ab5b-8ba9768291e3",
+      "name": "get profile details",
+      "type": "api",
+      "parentId": "69817910-f8ba-4aa4-85cb-713e7564eae6",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "https://backend.requestly.com/echo",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a0V"
+    },
+    {
+      "id": "08f65b04-88eb-4ebf-ab9d-cc94959d585d",
+      "name": "report user",
+      "type": "api",
+      "parentId": "69817910-f8ba-4aa4-85cb-713e7564eae6",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/reports/create/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "raw",
+            "raw": "{\n  \"reported_user\": \"<target_profile_uuid>\",\n  \"reason\": \"fake_profile\",\n  \"description\": \"Optional extra details\"\n}",
+            "rawContentType": "application/json"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a5"
+    },
+    {
+      "id": "3bd3bdc6-0191-481f-aa46-c3ef9a5ef14e",
+      "name": "block user",
+      "type": "api",
+      "parentId": "69817910-f8ba-4aa4-85cb-713e7564eae6",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/blocks/<target_profile_uuid>/block/",
+          "method": "POST",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a6"
+    },
+    {
+      "id": "5749acc0-4cab-4385-a04b-71b4812ef1e8",
+      "name": "list block user",
+      "type": "api",
+      "parentId": "69817910-f8ba-4aa4-85cb-713e7564eae6",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/blocks/",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a7"
+    },
+    {
+      "id": "07d85485-96ba-45fe-8cec-5b44ed0ee46c",
+      "name": "friends",
+      "type": "api",
+      "parentId": "a86a271f-d8d5-4159-9776-da28e2b2b26e",
+      "deleted": false,
+      "data": {
+        "type": "http",
+        "request": {
+          "url": "{{base_url}}/api/messages/threads/?type=friends",
+          "method": "GET",
+          "headers": [],
+          "queryParams": [
+            {
+              "id": 1,
+              "key": "type",
+              "value": "friends",
+              "isEnabled": true
+            }
+          ],
+          "pathVariables": [],
+          "body": {
+            "contentType": "none"
+          },
+          "contentType": "none"
+        },
+        "auth": {
+          "type": "inherit"
+        }
+      },
+      "rank": "a2"
+    }
+  ],
+  "environments": [],
+  "packages": []
+}

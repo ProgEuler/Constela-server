@@ -1,0 +1,950 @@
+{
+  "info": {
+    "_postman_id": "d80b7218-0955-468a-b9c1-efd5dbd3910c",
+    "name": "Constela Super Admin APIs",
+    "description": "Postman Collection for all Super Admin moderation, safety, statistics, and role management APIs.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "System Statistics Dashboard",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/dashboard/stats/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "dashboard",
+            "stats",
+            ""
+          ]
+        },
+        "description": "Returns site-wide counts of total users, active premium subscriptions, pending verifications, unresolved safety reports, and total platform revenue."
+      },
+      "response": []
+    },
+    {
+      "name": "Matches Dashboard Stats & List",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/matches/?search=Sophie&ordering=-percentage",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "matches",
+            ""
+          ],
+          "query": [
+            {
+              "key": "search",
+              "value": "Sophie",
+              "description": "Optional search by username"
+            },
+            {
+              "key": "ordering",
+              "value": "-percentage",
+              "description": "Sorting choice: date, -date, percentage, -percentage, messages, -messages"
+            }
+          ]
+        },
+        "description": "Returns matches page statistics (total, active, today, avg messages per match) and the sorted/filtered list of all unique mutual matches."
+      },
+      "response": []
+    },
+    {
+      "name": "Change User Role / Promote Staff",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"role\": \"moderator\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/users/1/role/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "users",
+            "1",
+            "role",
+            ""
+          ]
+        },
+        "description": "Updates a user's access role. Restricted strictly to Super Admin accounts. Choices: 'member', 'support', 'moderator', 'admin', 'superadmin'."
+      },
+      "response": []
+    },
+    {
+      "name": "Gift Subscription to User",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tier\": \"plus\",\n  \"duration_months\": 3\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/users/1/gift/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "users",
+            "1",
+            "gift",
+            ""
+          ]
+        },
+        "description": "Gifts a premium subscription (light, plus, or annual) to a user for a specified duration in months (e.g. 3, 6, 12). Restricted to Admin and Super Admin."
+      },
+      "response": []
+    },
+    {
+      "name": "Site-Wide Transactions Logs",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/transactions/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "transactions",
+            ""
+          ]
+        },
+        "description": "Lists all processed Stripe charge histories and billing logs across the entire user base."
+      },
+      "response": []
+    },
+    {
+      "name": "Master User List",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/users/?search=alex",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "users",
+            ""
+          ],
+          "query": [
+            {
+              "key": "search",
+              "value": "alex",
+              "description": "Search keyword for username or email"
+            }
+          ]
+        },
+        "description": "Returns a directory of all user profiles registered on the platform."
+      },
+      "response": []
+    },
+    {
+      "name": "List Pending Photo Verifications",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/verifications/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "verifications",
+            ""
+          ]
+        },
+        "description": "Returns a list of all user profiles awaiting photo selfie validation."
+      },
+      "response": []
+    },
+    {
+      "name": "Approve / Reject Photo Verification",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"action\": \"approve\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/verifications/1/action/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "verifications",
+            "1",
+            "action",
+            ""
+          ]
+        },
+        "description": "Approves or rejects a photo verification selfie. Body action parameter must be 'approve' or 'reject'."
+      },
+      "response": []
+    },
+    {
+      "name": "List Safety Reports Queue",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/reports/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "reports",
+            ""
+          ]
+        },
+        "description": "Returns a queue list of all safety reports submitted by members."
+      },
+      "response": []
+    },
+    {
+      "name": "Moderate Safety Report (Ban / Suspend)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"action\": \"ban\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/reports/1/take_action/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "reports",
+            "1",
+            "take_action",
+            ""
+          ]
+        },
+        "description": "Moderates reports queue. Action must be 'ban', 'suspend', or 'dismiss'."
+      },
+      "response": []
+    },
+    {
+      "name": "Safety Reports Dashboard",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/reports/dashboard/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "reports",
+            "dashboard",
+            ""
+          ]
+        },
+        "description": "Returns dashboard statistics (total reports, pending reports, resolved reports), the weekly report counts chart, the 5 most recent reports list, and all reports matching the fake profile reason."
+      },
+      "response": []
+    },
+    {
+      "name": "Request Selfie Verification from Report",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/reports/1/request_selfie/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "reports",
+            "1",
+            "request_selfie",
+            ""
+          ]
+        },
+        "description": "Resets the reported user's verification status (sets is_verified to false and face_verification_status to not_submitted) to prompt them for selfie upload, and marks the report as under_review."
+      },
+      "response": []
+    },
+    {
+      "name": "List Support Tickets Queue",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/tickets/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "tickets",
+            ""
+          ]
+        },
+        "description": "Retrieves support tickets queue list."
+      },
+      "response": []
+    },
+    {
+      "name": "Reply to Support Ticket",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"content\": \"Hi, your support issue has been resolved.\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/tickets/1/reply/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "tickets",
+            "1",
+            "reply",
+            ""
+          ]
+        },
+        "description": "Sends a reply response to support tickets, transitioning status to 'in_progress'."
+      },
+      "response": []
+    },
+    {
+      "name": "Resolve Support Ticket",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/tickets/1/resolve/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "tickets",
+            "1",
+            "resolve",
+            ""
+          ]
+        },
+        "description": "Resolves and closes a ticket."
+      },
+      "response": []
+    },
+    {
+      "name": "List Admin Chat Rooms",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/chat/rooms/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "chat",
+            "rooms",
+            ""
+          ]
+        },
+        "description": "Lists all chat rooms with active rooms stats and unique member metrics."
+      },
+      "response": []
+    },
+    {
+      "name": "Create Admin Chat Room",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Dating Advice for Autistics\",\n  \"description\": \"Tips and support for relationships.\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/chat/rooms/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "chat",
+            "rooms",
+            ""
+          ]
+        },
+        "description": "Creates a new chat room."
+      },
+      "response": []
+    },
+    {
+      "name": "Retrieve Admin Chat Room Detail",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/chat/rooms/1/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "chat",
+            "rooms",
+            "1",
+            ""
+          ]
+        },
+        "description": "Retrieves detail of a chat room including members list."
+      },
+      "response": []
+    },
+    {
+      "name": "Archive Admin Chat Room",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/chat/rooms/1/archive/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "chat",
+            "rooms",
+            "1",
+            "archive",
+            ""
+          ]
+        },
+        "description": "Archives a chat room."
+      },
+      "response": []
+    },
+    {
+      "name": "Remove Member from Chat Room",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"profile_id\": 2\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/chat/rooms/1/remove-member/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "chat",
+            "rooms",
+            "1",
+            "remove-member",
+            ""
+          ]
+        },
+        "description": "Removes a member from the chat room."
+      },
+      "response": []
+    },
+    {
+      "name": "Block Member from Chat Room",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"profile_id\": 2\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/chat/rooms/1/block-member/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "chat",
+            "rooms",
+            "1",
+            "block-member",
+            ""
+          ]
+        },
+        "description": "Blocks a member's profile/account and removes them from the chat room."
+      },
+      "response": []
+    },
+    {
+      "name": "List Admin Accounts",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/accounts/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "accounts",
+            ""
+          ]
+        },
+        "description": "Lists all staff/admin/moderator/support accounts."
+      },
+      "response": []
+    },
+    {
+      "name": "Create Admin Account",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"full_name\": \"John Moderator\",\n  \"email\": \"john.mod@atypical.com\",\n  \"role\": \"moderator\",\n  \"password\": \"temppassword123\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/accounts/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "accounts",
+            ""
+          ]
+        },
+        "description": "Creates a new staff/admin account."
+      },
+      "response": []
+    },
+    {
+      "name": "Update Admin Account",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"full_name\": \"John Support\",\n  \"email\": \"john.support@atypical.com\",\n  \"role\": \"support\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/accounts/1/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "accounts",
+            "1",
+            ""
+          ]
+        },
+        "description": "Updates an existing staff/admin account."
+      },
+      "response": []
+    },
+    {
+      "name": "Delete Admin Account",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://127.0.0.1:8000/api/admin/accounts/1/",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8000",
+          "path": [
+            "api",
+            "admin",
+            "accounts",
+            "1",
+            ""
+          ]
+        },
+        "description": "Deletes/removes a staff/admin account."
+      },
+      "response": []
+    }
+  ]
+}
