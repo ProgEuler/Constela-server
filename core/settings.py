@@ -91,8 +91,7 @@ INSTALLED_APPS = [
     # Third-party apps
     'rest_framework',
     'corsheaders',
-    'cloudinary_storage',
-    'cloudinary',
+    'storages',
     'channels',
     
     # Local apps
@@ -208,33 +207,27 @@ SIMPLE_JWT = {
 # CORS configuration
 CORS_ALLOW_ALL_ORIGINS = True  # Enable for development
 
-# Cloudinary — Cloud storage for profile photos and face selfies
-CLOUDINARY_STORAGE = {
-    'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME'),
-    'API_KEY': os.environ.get('CLOUDINARY_API_KEY'),
-    'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET'),
-}
+# Cloudflare R2 Storage (via boto3)
+AWS_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY')
+AWS_STORAGE_BUCKET_NAME = os.environ.get('R2_BUCKET_NAME')
+AWS_S3_ENDPOINT_URL = os.environ.get('R2_ENDPOINT_URL')
+AWS_S3_SIGNATURE_VERSION = 's3v4'
+AWS_S3_REGION_NAME = 'auto' # Cloudflare R2 uses 'auto' region
+AWS_DEFAULT_ACL = None # R2 doesn't support ACLs
+AWS_QUERYSTRING_AUTH = True # Generate presigned URLs for private buckets
+AWS_S3_FILE_OVERWRITE = False
 
-# Django 4.2+ / 6.0 requires STORAGES dict — DEFAULT_FILE_STORAGE is deprecated & ignored
+# Django 4.2+ / 6.0 requires STORAGES dict
 STORAGES = {
     'default': {
-        'BACKEND': 'cloudinary_storage.storage.MediaCloudinaryStorage',
+        'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
     },
     'staticfiles': {
         'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
     },
 }
 MEDIA_URL = '/media/'
-
-
-# Explicitly initialize the Cloudinary SDK so .url always returns a CDN URL
-import cloudinary
-cloudinary.config(
-    cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME'),
-    api_key=os.environ.get('CLOUDINARY_API_KEY'),
-    api_secret=os.environ.get('CLOUDINARY_API_SECRET'),
-    secure=True,
-)
 
 
 # Email Settings (SMTP)

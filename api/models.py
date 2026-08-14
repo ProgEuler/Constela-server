@@ -106,6 +106,7 @@ class UserProfile(models.Model):
     # Flags & Preferences
     likes_push = models.BooleanField(default=True)
     messages_push = models.BooleanField(default=True)
+    push_token = models.CharField(max_length=255, blank=True, null=True)
     is_dark_mode = models.BooleanField(default=False)
     preferred_language = models.CharField(max_length=10, default='en')
     is_deactivated = models.BooleanField(default=False)
@@ -113,6 +114,7 @@ class UserProfile(models.Model):
     # Face Verification
     FACE_VERIFY_STATUS = (
         ('not_submitted', 'Not Submitted'),
+        ('skipped', 'Skipped'),
         ('pending', 'Pending Review'),
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
@@ -126,6 +128,7 @@ class UserProfile(models.Model):
         default='not_submitted'
     )
     face_verified_at = models.DateTimeField(null=True, blank=True)
+    must_verify_face = models.BooleanField(default=False)
     onboarding_part1_completed = models.BooleanField(default=False)
 
     def __str__(self):

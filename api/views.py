@@ -28,6 +28,7 @@ from api.serializers import (
 )
 from api.permissions import IsMember, IsSupportAgent, IsModerator, IsAdminUser, IsSuperAdmin
 from api.matching_engine import calculate_compatibility
+from api.push_notifications import send_push_notification_to_user
 
 def get_cloudinary_url(image_field):
     """Return a guaranteed Cloudinary CDN URL for a stored ImageField."""
@@ -88,13 +89,152 @@ class OTPVerifyView(APIView):
             # Generate JWT Tokens
             refresh = RefreshToken.for_user(user)
             return Response({
-                "message": "OTP verification successful.",
                 "access": str(refresh.access_token),
                 "refresh": str(refresh),
-                "role": user.role
+                "user": {
+                    "email": user.email,
+                    "username": user.username,
+                    "is_verified": user.is_verified,
+                }
             }, status=status.HTTP_200_OK)
-            
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GoogleAuthView(APIView):
+    """
+    POST /api/auth/google/
+    Exchanges Google id_token or access_token for App JWT Access & Refresh tokens.
+    Automatically provisions new User & UserProfile if not exists, maintaining
+    the exact same onboarding flow for new and existing users.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        from django.contrib.auth import get_user_model
+        import firebase_admin
+        from firebase_admin import auth as firebase_auth
+
+        User = get_user_model()
+
+        id_token = request.data.get('id_token')
+
+        if not id_token:
+            return Response(
+                {"error": "id_token is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        email = None
+        first_name = ""
+        last_name = ""
+
+        try:
+            # First, try to verify using Firebase Admin SDK
+            decoded_token = firebase_auth.verify_id_token(id_token)
+            email = decoded_token.get("email")
+            full_name = decoded_token.get("name", "")
+        except Exception as e:
+            # If Firebase fails (e.g. it's a raw Google OAuth token instead of a Firebase token),
+            # verify it directly using Google's tokeninfo endpoint
+            import requests
+            response = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}")
+            if response.status_code == 200:
+                decoded_token = response.json()
+                email = decoded_token.get("email")
+                full_name = decoded_token.get("name", "")
+            else:
+                return Response(
+                    {"error": f"Invalid or expired Google token: {response.json().get('error_description', str(e))}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        if full_name:
+            parts = full_name.split(' ', 1)
+            first_name = parts[0]
+            if len(parts) > 1:
+                last_name = parts[1]
+
+        if not email:
+            return Response(
+                {"error": "Google token does not contain an email address."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user = User.objects.filter(email__iexact=email).first()
+        is_new_user = False
+
+        if not user:
+            is_new_user = True
+            base_username = email.split("@")[0].replace(".", "_")
+            username = base_username
+            counter = 1
+            while User.objects.filter(username__iexact=username).exists():
+                username = f"{base_username}_{counter}"
+                counter += 1
+
+            user = User.objects.create(
+                email=email.lower(),
+                username=username,
+                first_name=first_name,
+                last_name=last_name,
+                is_verified=True,
+                is_active=True,
+            )
+            user.set_unusable_password()
+            user.save()
+
+            # Ensure UserProfile exists with initial onboarding state
+            UserProfile.objects.get_or_create(
+                user=user,
+                defaults={
+                    "username": username,
+                    "profile_completion_pct": 0,
+                    "onboarding_part1_completed": False,
+                    "face_verification_status": "not_submitted",
+                    "is_verified": True,
+                }
+            )
+
+        # Generate JWT Tokens
+        refresh = RefreshToken.for_user(user)
+        profile = getattr(user, 'profile', None)
+
+        return Response({
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+            "is_new_user": is_new_user,
+            "user": {
+                "id": str(user.id),
+                "email": user.email,
+                "username": user.username,
+                "first_name": user.first_name,
+                "is_verified": user.is_verified,
+            },
+            "profile": {
+                "profile_completion_pct": profile.profile_completion_pct if profile else 0,
+                "face_verification_status": profile.face_verification_status if profile else "not_submitted",
+                "onboarding_part1_completed": profile.onboarding_part1_completed if profile else False,
+            } if profile else None
+        }, status=status.HTTP_200_OK)
+
+
+class RegisterPushTokenView(APIView):
+    """
+    POST /api/auth/push-token/
+    Registers or updates the Expo / FCM push token for the authenticated user profile.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        push_token = request.data.get('push_token', '').strip()
+        if not push_token:
+            return Response({"error": "push_token is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
+        profile.push_token = push_token
+        profile.save()
+
+        return Response({"message": "Push token registered successfully."}, status=status.HTTP_200_OK)
 
 class ResendOTPView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -125,19 +265,8 @@ class ResendOTPView(APIView):
             action='generated'
         )
 
-        try:
-            from django.core.mail import send_mail
-            from django.conf import settings
-            send_mail(
-                subject="Your new OTP Verification Code",
-                message=f"Your new OTP code is: {otp_code}",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=False,
-            )
-            print(f"✅ New OTP email sent to {user.email}")
-        except Exception as e:
-            print(f"❌ Failed to send new OTP email to {user.email}: {e}")
+        from api.email_service import send_resend_otp_email
+        send_resend_otp_email(user.email, otp_code, username=user.username)
 
         return Response({"message": "New OTP sent to email."}, status=status.HTTP_200_OK)
 
@@ -174,18 +303,9 @@ class ForgotPasswordView(APIView):
             action='generated'
         )
 
-        # Send actual email via SMTP
-        try:
-            send_mail(
-                subject="Password Reset Request Code",
-                message=f"Your password reset code is: {code}",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=False,
-            )
-            print(f"✅ Password reset email sent to {user.email}")
-        except Exception as e:
-            print(f"❌ Failed to send password reset email to {user.email}: {e}")
+        # Send actual email via SMTP with HTML template
+        from api.email_service import send_password_reset_email
+        send_password_reset_email(user.email, code, username=user.username)
 
         return Response({"message": "If the account exists, a reset code has been sent."}, status=status.HTTP_200_OK)
 
@@ -338,6 +458,12 @@ class UserProfileViewSet(viewsets.ModelViewSet):
         if serializer.is_valid():
             profile_obj = serializer.save()
             
+            if 'face_verification_status' in request.data:
+                new_status = request.data.get('face_verification_status')
+                if new_status == 'skipped' and profile_obj.face_verification_status in ['not_submitted', 'skipped']:
+                    profile_obj.face_verification_status = 'skipped'
+                    profile_obj.save()
+            
             # Process profile photos uploaded simultaneously in this FormData request
             uploaded_files = []
             if 'photos' in request.FILES:
@@ -485,11 +611,12 @@ class PerfectMatchView(APIView):
         # Count remaining candidates that have not been swiped at all
         candidates_count = UserProfile.objects.filter(
             is_deactivated=False,
-            is_verified=True
+            is_verified=True,
+            user__role='member'
         ).exclude(id__in=active_exclude).exclude(id__in=swiped_users).count()
         
-        # If no profiles are left, recycle the 'disliked' matches to give them another chance
-        if candidates_count == 0:
+        # If 5 or fewer profiles are left, recycle the 'disliked' matches to give them another chance
+        if candidates_count <= 5:
             Match.objects.filter(user1=me, status='disliked').delete()
             swiped_users = Match.objects.filter(user1=me).values_list('user2', flat=True)
             
@@ -715,7 +842,9 @@ class PerfectMatchView(APIView):
                 filtered_candidates.append(candidate)
             candidates = filtered_candidates
 
-        # Compute compatibility score
+        # Compute compatibility score and check for super likes
+        superliked_by_ids = set(Match.objects.filter(user2=me, status='superliked').values_list('user1_id', flat=True))
+        
         matches = []
         for candidate in candidates:
             # Calculate distance if coordinates are set
@@ -766,15 +895,17 @@ class PerfectMatchView(APIView):
                 "tags": qualities_display,
                 "photo": photo_url,
                 "compatibility_score": score,
-                "distance": round(distance, 1) if distance is not None else None
+                "distance": round(distance, 1) if distance is not None else None,
+                "has_superliked_me": candidate.id in superliked_by_ids,
+                "is_verified": candidate.is_verified
             })
             
-        # Sort descending by score
-        matches = sorted(matches, key=lambda x: x['compatibility_score'], reverse=True)
-        
-        # Shuffle results so that users don't get the exact same order on every pull/refresh
+        # Shuffle results first to randomize the base deck
         import random
         random.shuffle(matches)
+        
+        # Then stable sort so that anyone who superliked you floats to the very top
+        matches = sorted(matches, key=lambda x: x['has_superliked_me'], reverse=True)
 
         # Pagination
         try:
@@ -808,6 +939,19 @@ class PerfectMatchView(APIView):
         next_page = f"{base_with_params}page={page + 1}" if page < total_pages else None
         prev_page = f"{base_with_params}page={page - 1}" if page > 1 else None
 
+        # Check if limit is already reached
+        limit_reached = False
+        daily_likes = Match.objects.filter(
+            user1=me, 
+            status__in=['liked', 'superliked', 'matched'], 
+            created_at__date=timezone.now().date()
+        ).count()
+        
+        if me.subscription_tier == 'freemium' and daily_likes >= 20:
+            limit_reached = True
+        elif me.subscription_tier == 'light' and daily_likes >= 50:
+            limit_reached = True
+
         return Response({
             "total_count": total_count,
             "page": page,
@@ -815,7 +959,8 @@ class PerfectMatchView(APIView):
             "total_pages": total_pages,
             "next": next_page,
             "previous": prev_page,
-            "results": paginated_matches
+            "results": paginated_matches,
+            "limit_reached": limit_reached
         }, status=status.HTTP_200_OK)
 
 
@@ -824,14 +969,14 @@ class MatchAnalysisView(APIView):
     """
     GET /api/matching/analysis/
     Returns the top 5 highest-scored matches for the user.
-    Requires Perfect Match Analysis add-on or Premium Plus.
+    Requires Perfect Match Analysis add-on.
     """
     def get(self, request):
         me = get_object_or_404(UserProfile, user=request.user)
         
-        if me.subscription_tier != 'plus' and not me.has_match_analysis:
+        if not me.has_match_analysis:
             return Response(
-                {"error": "You need the Perfect Match Analysis add-on or Premium Plus to access this feature."},
+                {"error": "You need the Perfect Match Analysis add-on to access this feature."},
                 status=status.HTTP_403_FORBIDDEN
             )
             
@@ -854,15 +999,40 @@ class MatchAnalysisView(APIView):
             is_verified=True,
             user__role='member'
         ).exclude(id__in=exclude_users)
+
+        # Filter by opposite gender based on user's profile
+        if me.gender.lower() == 'man':
+            candidates = candidates.filter(gender__iexact='woman')
+        elif me.gender.lower() == 'woman':
+            candidates = candidates.filter(gender__iexact='man')
         
         matches = []
         for candidate in candidates:
             comp_score = calculate_compatibility(me, candidate)
             
-            serializer = UserProfileBasicSerializer(candidate)
-            data = serializer.data
-            data['compatibility_score'] = comp_score
-            matches.append(data)
+            # Fetch photo URL
+            photo_url = None
+            if candidate.photos.exists():
+                main_photo = candidate.photos.filter(is_main=True).first()
+                if not main_photo:
+                    main_photo = candidate.photos.first()
+                photo_url = request.build_absolute_uri(main_photo.image.url)
+
+            # Build tags
+            qualities_display = candidate.qualities if candidate.qualities else []
+            interests_list = candidate.interests if candidate.interests else []
+
+            matches.append({
+                "id": candidate.id,
+                "name": candidate.display_name,
+                "age": candidate.age,
+                "gender": candidate.gender,
+                "city": candidate.city,
+                "country": candidate.country,
+                "tags": qualities_display + interests_list,
+                "photo": photo_url,
+                "compatibility_score": comp_score
+            })
             
         # Sort strictly by score, descending
         matches = sorted(matches, key=lambda x: x['compatibility_score'], reverse=True)
@@ -886,6 +1056,9 @@ class MatchActionView(APIView):
             return Response({"error": "Invalid action. Use 'liked', 'disliked', 'superliked', or 'undo'."}, status=status.HTTP_400_BAD_REQUEST)
             
         if action_type == 'undo':
+            if me.subscription_tier == 'freemium':
+                return Response({"error": "Undo is a premium feature. Upgrade to Premium to rewind your swipes."}, status=status.HTTP_403_FORBIDDEN)
+                
             match_obj = Match.objects.filter(user1=me, user2=target).first()
             if match_obj:
                 if match_obj.status == 'matched':
@@ -931,6 +1104,14 @@ class MatchActionView(APIView):
                 mutual.status = 'matched'
                 mutual.save()
                 is_mutual = True
+                
+                if getattr(target, 'likes_push', True):
+                    send_push_notification_to_user(
+                        user=target.user,
+                        title="It's a Match! 🎉",
+                        body=f"You and {me.name or me.username} have liked each other.",
+                        data={"type": "match", "profile_id": me.id}
+                    )
                 
         return Response({
             "status": match_obj.status,
@@ -1129,6 +1310,58 @@ class FriendshipViewSet(viewsets.ModelViewSet):
         return Response(requests_data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'])
+    def sent_requests(self, request):
+        me = get_object_or_404(UserProfile, user=request.user)
+        outgoing = Friendship.objects.filter(sender=me, status='pending').select_related('receiver')
+        
+        # Pre-fetch my accepted friend IDs to speed up mutual friend calculations
+        my_friends = set(
+            Friendship.objects.filter(Q(sender=me) | Q(receiver=me), status='accepted')
+            .values_list('sender_id', 'receiver_id')
+        )
+        my_friend_ids = {s if s != me.id else r for s, r in my_friends}
+
+        requests_data = []
+        for req in outgoing:
+            receiver = req.receiver
+            
+            # Fetch receiver's accepted friends
+            receiver_friends = set(
+                Friendship.objects.filter(Q(sender=receiver) | Q(receiver=receiver), status='accepted')
+                .values_list('sender_id', 'receiver_id')
+            )
+            receiver_friend_ids = {s if s != receiver.id else r for s, r in receiver_friends}
+            
+            mutual_count = len(my_friend_ids.intersection(receiver_friend_ids))
+
+            # Main photo
+            main_photo = receiver.photos.filter(is_main=True).first()
+            if not main_photo:
+                main_photo = receiver.photos.first()
+            photo_url = get_cloudinary_url(main_photo.image) if main_photo else None
+
+            # Subtitle text
+            location = receiver.city or receiver.country or ""
+            if mutual_count > 0:
+                subtitle = f"{mutual_count} mutual friend{'s' if mutual_count > 1 else ''}"
+                if location:
+                    subtitle += f" • {location}"
+            else:
+                subtitle = location
+
+            requests_data.append({
+                "id": req.id,
+                "receiver_id": receiver.id,
+                "name": receiver.display_name,
+                "photo": photo_url,
+                "subtitle": subtitle,
+                "mutual_friends_count": mutual_count,
+                "location": location
+            })
+            
+        return Response(requests_data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'])
     def suggestions(self, request):
         me = get_object_or_404(UserProfile, user=request.user)
 
@@ -1232,6 +1465,14 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             friendship.status = 'pending'
             friendship.save()
             
+        if getattr(target, 'messages_push', True):
+            send_push_notification_to_user(
+                user=target.user,
+                title="New Friend Request",
+                body=f"{me.name or me.username} sent you a friend request!",
+                data={"type": "friend_request_received", "profile_id": me.id}
+            )
+            
         return Response({"message": "Request sent."}, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'])
@@ -1241,6 +1482,15 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             return Response({"error": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
         friendship.status = 'accepted'
         friendship.save()
+        
+        if getattr(friendship.sender, 'messages_push', True):
+            send_push_notification_to_user(
+                user=friendship.sender.user,
+                title="Friend Request Accepted",
+                body=f"{friendship.receiver.name or friendship.receiver.username} accepted your friend request!",
+                data={"type": "friend_request_accepted", "profile_id": friendship.receiver.id}
+            )
+        
         return Response({"message": "Friend request accepted."})
 
     @action(detail=True, methods=['post'])
@@ -1280,7 +1530,20 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ChatRoomSerializer
 
     def get_queryset(self):
-        queryset = ChatRoom.objects.all()
+        # Order by created_at to ensure consistent chat rooms are returned for restricted tiers
+        queryset = ChatRoom.objects.all().order_by('created_at')
+        
+        if hasattr(self.request, 'user') and self.request.user.is_authenticated:
+            try:
+                me = UserProfile.objects.get(user=self.request.user)
+                has_full_access = (me.subscription_tier == 'plus' or me.has_all_chat_rooms)
+                if not has_full_access:
+                    # Freemium and Premium Light only get access to the first 3 chat rooms
+                    allowed_ids = list(ChatRoom.objects.order_by('created_at').values_list('id', flat=True)[:3])
+                    queryset = queryset.filter(id__in=allowed_ids)
+            except UserProfile.DoesNotExist:
+                pass
+
         search_query = self.request.query_params.get('search')
         if search_query:
             queryset = queryset.filter(Q(name__icontains=search_query) | Q(description__icontains=search_query))
@@ -1665,17 +1928,8 @@ class RequestEmailChangeView(APIView):
         # Cache the new email for 10 minutes
         cache.set(f"pending_email_{user.id}", new_email, timeout=600)
         
-        try:
-            send_mail(
-                subject="Your Email Change Verification Code",
-                message=f"Your OTP code is: {otp_code}",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[new_email],
-                fail_silently=False,
-            )
-            print(f"✅ Email change OTP sent to {new_email}. OTP: {otp_code}")
-        except Exception as e:
-            print(f"❌ Failed to send email change OTP to {new_email}: {e}")
+        from api.email_service import send_email_change_email
+        send_email_change_email(new_email, otp_code, username=user.username)
             
         return Response({"message": "OTP sent to new email."})
 
@@ -1726,23 +1980,34 @@ class UpgradeSubscriptionView(APIView):
         amount = request.data.get('amount')
         stripe_charge_id = request.data.get('stripe_charge_id', f"mock_ch_{int(timezone.now().timestamp())}")
 
-        if tier not in ['light', 'plus', 'freemium']:
-            return Response({"error": "Invalid subscription tier. Choose 'light', 'plus', or 'freemium'."}, status=status.HTTP_400_BAD_REQUEST)
+        valid_tiers = ['light', 'plus', 'freemium', 'add_on_filters', 'add_on_chatrooms', 'add_on_perfect_match']
+        if tier not in valid_tiers:
+            return Response({"error": "Invalid subscription tier."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Set default pricing
         tier_pricing = {
             'freemium': 0.00,
             'light': 9.99,
-            'plus': 19.99
+            'plus': 19.99,
+            'add_on_filters': 2.99,
+            'add_on_chatrooms': 3.99,
+            'add_on_perfect_match': 14.99
         }
         charge_amount = amount if amount is not None else tier_pricing[tier]
 
-        # Update profile tier
-        me.subscription_tier = tier
-        if tier != 'freemium':
-            me.subscription_expires = timezone.now() + timezone.timedelta(days=30)
+        # Update profile tier or add-on
+        if tier == 'add_on_filters':
+            me.has_advanced_filters = True
+        elif tier == 'add_on_chatrooms':
+            me.has_all_chat_rooms = True
+        elif tier == 'add_on_perfect_match':
+            me.has_match_analysis = True
         else:
-            me.subscription_expires = None
+            me.subscription_tier = tier
+            if tier != 'freemium':
+                me.subscription_expires = timezone.now() + timezone.timedelta(days=30)
+            else:
+                me.subscription_expires = None
         me.save()
 
         # Log transaction
@@ -1781,6 +2046,14 @@ class CreateReportView(APIView):
             reason=reason,
             description=description
         )
+        
+        # Check if the user needs mandatory verification (3 unique reporters)
+        if reported_user.face_verification_status != 'approved':
+            unique_reporters_count = Report.objects.filter(reported_user=reported_user).values('reporter').distinct().count()
+            if unique_reporters_count >= 3:
+                reported_user.must_verify_face = True
+                reported_user.save()
+
         serializer = ReportSerializer(report)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -2377,6 +2650,7 @@ class AdminVerificationViewSet(APIView):
         if action_type == 'approve':
             profile.is_verified = True
             profile.face_verification_status = 'approved'
+            profile.must_verify_face = False
             profile.save()
             
             # Also mark underlying photos as verified

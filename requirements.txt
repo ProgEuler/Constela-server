@@ -14,3 +14,5 @@ cloudinary
 django-cloudinary-storage
 opencv-python-headless==4.10.0.84
 
+
+firebase-admin==7.5.0

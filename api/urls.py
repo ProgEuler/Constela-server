@@ -16,7 +16,7 @@ class SafeTokenRefreshView(TokenRefreshView):
 
 from api.serializers import ChahiraTokenObtainPairView
 from api.views import (
-    UserRegisterView, OTPVerifyView, ResendOTPView, ForgotPasswordView, ResetPasswordView, CheckUsernameView, FaceVerifyView, FaceDetectView,
+    UserRegisterView, OTPVerifyView, ResendOTPView, ForgotPasswordView, ResetPasswordView, CheckUsernameView, FaceVerifyView, FaceDetectView, GoogleAuthView, RegisterPushTokenView,
     UserProfileViewSet, UserPhotoViewSet,
     PerfectMatchView, MatchAnalysisView, MatchActionView, LikesReceivedView, LikesSentView, MutualMatchesView,
     SaveMatchView, UnsaveMatchView, SavedMatchesListView, UnmatchUserView, UnfriendUserView,
@@ -53,6 +53,8 @@ urlpatterns = [
     path('auth/verify-otp/', OTPVerifyView.as_view(), name='auth-verify-otp'),
     path('auth/resend-otp/', ResendOTPView.as_view(), name='auth-resend-otp'),
     path('auth/login/', ChahiraTokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('auth/google/', GoogleAuthView.as_view(), name='auth-google'),
+    path('auth/push-token/', RegisterPushTokenView.as_view(), name='auth-push-token'),
     path('auth/token/refresh/', SafeTokenRefreshView.as_view(), name='token_refresh'),
     path('auth/check-username/', CheckUsernameView.as_view(), name='check-username'),
     path('auth/face-verify/', FaceVerifyView.as_view(), name='face-verify'),

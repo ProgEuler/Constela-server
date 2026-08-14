@@ -63,6 +63,19 @@ class RevenueCatWebhookView(APIView):
             is_grant_event = event_type in ['INITIAL_PURCHASE', 'RENEWAL', 'PRODUCT_CHANGE', 'NON_RENEWING_PURCHASE', 'TRANSFER']
             is_revoke_event = event_type in ['EXPIRATION', 'CANCELLATION', 'REVOCATION']
 
+            # Fallback: if entitlements array is empty, try to guess from product_id
+            if not entitlement_ids and product_id:
+                if 'plus' in product_id:
+                    entitlement_ids = ['premium_plus']
+                elif 'light' in product_id:
+                    entitlement_ids = ['premium_light']
+                elif 'filters' in product_id:
+                    entitlement_ids = ['add_on_advanced_filters']
+                elif 'chat' in product_id or 'chatrooms' in product_id:
+                    entitlement_ids = ['add_on_chat_rooms']
+                elif 'match' in product_id:
+                    entitlement_ids = ['add_on_match_analysis']
+
             for entitlement in entitlement_ids:
                 if entitlement == 'premium_plus':
                     if is_grant_event:
@@ -88,19 +101,19 @@ class RevenueCatWebhookView(APIView):
                         profile.subscription_product_id = None
                         profile.subscription_store = None
                 
-                elif entitlement == 'add_on_advanced_filters':
+                elif entitlement == 'add_on_advanced_filters' or 'filters' in entitlement or 'filters' in product_id:
                     if is_grant_event:
                         profile.has_advanced_filters = True
                     elif is_revoke_event:
                         profile.has_advanced_filters = False
                 
-                elif entitlement == 'add_on_chat_rooms':
+                elif entitlement == 'add_on_chat_rooms' or 'chat' in entitlement or 'chatrooms' in product_id:
                     if is_grant_event:
                         profile.has_all_chat_rooms = True
                     elif is_revoke_event:
                         profile.has_all_chat_rooms = False
                 
-                elif entitlement == 'add_on_match_analysis':
+                elif entitlement == 'add_on_match_analysis' or 'match' in entitlement or 'match' in product_id:
                     if is_grant_event:
                         profile.has_match_analysis = True
                     elif is_revoke_event:

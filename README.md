@@ -1,95 +1,64 @@
-# 🚀 Constela (Chahira) Backend Architecture & Services Guide
+# Constela Backend
 
-Welcome to the backend repository for **Constela (Chahira)** — a modern dating & social platform powered by **Django 5**, **Django REST Framework (DRF)**, **SimpleJWT**, and **Django Channels (WebSockets)**.
+This is the backend for the **Constela** dating application, built using Django REST Framework (DRF) for the core API and Django Channels for real-time WebSocket communication. 
 
----
-
-## 🛠️ Tech Stack & Platform Services
-
-Here is a breakdown of every third-party platform and service integrated into this backend, along with its specific role and purpose in the application ecosystem:
-
-| Platform / Service | Category | Purpose in Constela App |
-| :--- | :--- | :--- |
-| **🔥 Firebase (Google Cloud Platform)** | Authentication & Push Notifications | Handles Google Social Sign-In token verification, Android/iOS push notifications (FCM & Expo Push), and app manifest security. |
-| **☁️ Cloudflare R2** | Object / Media Storage | High-speed, S3-compatible cloud storage with **$0 Egress (download) fees**. Used to store user profile photos, face verification selfies, and chat attachments without incurring bandwidth bills as the user base grows. |
-| **📧 Brevo (Sendinblue)** | Email Service (SMTP) | Delivers branded transactional HTML emails for 6-digit OTP signup codes, password reset links, resend requests, and email changes. |
-| **💳 RevenueCat** | Subscription & In-App Payments | Manages premium subscription tiers, in-app purchases (IAP) for iOS App Store & Google Play, entitlements, and real-time backend webhooks. |
-| **🤖 OpenCV / Face Detection** | AI Security & Verification | Performs automated face detection on user-uploaded selfies to enforce account authenticity and verification badges. |
+The backend is completely container-ready and built to be 100% portable, specifically optimized for seamless deployment on PaaS platforms like **Dokploy**.
 
 ---
 
-## 📁 Key Environment Variables (`.env`)
+## 🛠 Tech Stack & Third-Party Services
 
-All third-party platform keys are centralized in `backend/.env`. Here is what each variable is for:
+We utilize several external services to power core features of the app:
 
-```env
-# 1. BREVO EMAIL (SMTP) CREDENTIALS
-EMAIL_HOST=smtp-relay.brevo.com
-EMAIL_PORT=587
-EMAIL_USE_TLS=True
-EMAIL_HOST_USER=your_brevo_smtp_user
-EMAIL_HOST_PASSWORD=your_brevo_smtp_password
-DEFAULT_FROM_EMAIL=no-reply@projectyard.top
+### 1. Firebase (Google Cloud)
+* **What it does:** Powers both **Google Sign-In** and **Push Notifications (FCM)**.
+* **How it works:** We use the `firebase-admin` Python SDK. Instead of mounting a physical credentials file on the server, the backend is configured to read the entire Service Account JSON directly from the `FIREBASE_CREDENTIALS_JSON` environment variable. This allows the backend to verify the cryptographic signatures of Google OAuth tokens and dispatch push notifications securely.
 
-# 2. CLOUDFLARE R2 MEDIA STORAGE
-R2_ACCESS_KEY_ID=your_cloudflare_r2_access_key
-R2_SECRET_ACCESS_KEY=your_cloudflare_r2_secret_key
-R2_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
-R2_BUCKET_NAME=constela
+### 2. Cloudflare R2
+* **What it does:** High-performance, zero-egress-fee object storage for user media.
+* **How it works:** All profile photos and images sent in chat messages are uploaded directly to a Cloudflare R2 bucket (`constela`). We use the standard AWS S3 SDK (boto3/django-storages) configured to point to Cloudflare's S3-compatible endpoints to handle the uploads and serve the media securely.
 
-# 3. GOOGLE / FIREBASE OAUTH CREDENTIALS
-GOOGLE_CLIENT_ID_WEB=your_google_web_client_id.apps.googleusercontent.com
-GOOGLE_CLIENT_ID_IOS=your_google_ios_client_id.apps.googleusercontent.com
-GOOGLE_CLIENT_ID_ANDROID=your_google_android_client_id.apps.googleusercontent.com
+### 3. RevenueCat
+* **What it does:** Manages premium subscriptions and in-app purchases.
+* **How it works:** The backend exposes a secure webhook endpoint (`/api/webhooks/revenuecat/`) that RevenueCat calls whenever a user subscribes, cancels, or renews. The endpoint uses the `REVENUECAT_WEBHOOK_SECRET` to verify the request is authentically from RevenueCat before upgrading the user's account in our database.
 
-# 4. REVENUECAT SUBSCRIPTIONS
-REVENUECAT_WEBHOOK_SECRET=your_revenuecat_webhook_secret_token
+### 4. WebSockets (Django Channels)
+* **What it does:** Powers real-time direct messaging between matches.
+* **How it works:** Users connect to `wss://<domain>/ws/chat/?token=<jwt_token>`. The backend validates the JWT in real-time and routes messages between clients instantaneously.
 
-# 5. EXPO PUSH NOTIFICATIONS
-EXPO_PUSH_ACCESS_TOKEN=your_expo_push_access_token
+---
+
+## 🚀 Deployment (Dokploy & Docker)
+
+> [!NOTE]
+> **Active Deployment:** This server is currently deployed and running via **Dokploy** on a VPS. All production backend credentials and `.env` variables can be found and managed directly within the Dokploy Environment dashboard on the VPS.
+
+Because all sensitive configurations have been stripped out of the codebase and moved to Environment Variables, deploying the app is incredibly simple.
+
+### Setting up the Environment
+You must inject the following variables into your Dokploy (or Docker) Environment UI:
+
+#### Django & Database
+* `SECRET_KEY`: Your Django secret key.
+* `DEBUG`: Set to `False` in production.
+* `ALLOWED_HOSTS`: Your domain (e.g., `api.constela.com`).
+* *Database URL (if using PostgreSQL instead of SQLite)*
+
+#### Firebase (Authentication & Push Notifications)
+* `FIREBASE_CREDENTIALS_JSON`: The **full stringified JSON** of your `firebase-service-account.json` file. 
+  *(Example: `{"type": "service_account", "project_id": "...", ...}`)*
+
+#### Cloudflare R2 (Media Storage)
+* `R2_ACCESS_KEY_ID`: Cloudflare R2 Access Key.
+* `R2_SECRET_ACCESS_KEY`: Cloudflare R2 Secret Key.
+* `R2_ENDPOINT_URL`: Your S3-compatible R2 endpoint url.
+* `R2_BUCKET_NAME`: The name of your R2 bucket.
+
+#### RevenueCat (Subscriptions)
+* `REVENUECAT_WEBHOOK_SECRET`: The authorization token set in your RevenueCat webhook dashboard to secure incoming requests.
+
+### Running the Server
+Once the environment variables are injected, the server can be started securely using any standard ASGI server (like Uvicorn or Daphne) to support both HTTP and WebSocket traffic:
+```bash
+uvicorn core.asgi:application --host 0.0.0.0 --port 8000
 ```
-
----
-
-## 🏗️ Architecture Overview
-
-```text
-       ┌────────────────────────────────────────────────────────┐
-       │                 Mobile App (React Native)              │
-       └───────────┬────────────────────────────────┬───────────┘
-                   │ HTTP / REST                    │ WebSockets
-                   ▼                                ▼
-       ┌────────────────────────────────────────────────────────┐
-       │             Django 5 Backend API (Uvicorn)             │
-       └─────┬──────────────┬──────────────┬──────────────┬─────┘
-             │              │              │              │
-             ▼              ▼              ▼              ▼
-       ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐
-       │ Firebase  │  │Cloudflare │  │  Brevo    │  │ Revenue   │
-       │ Google    │  │    R2     │  │   SMTP    │  │    Cat    │
-       │ Auth/Push │  │  Media    │  │  Emails   │  │ Payments  │
-       └───────────┘  └───────────┘  └───────────┘  └───────────┘
-```
-
----
-
-## 🏃 Running The Backend Locally
-
-1. **Activate Virtual Environment**:
-   ```bash
-   source .venv/bin/activate
-   ```
-2. **Apply Migrations**:
-   ```bash
-   python manage.py migrate
-   ```
-3. **Start Development Server**:
-   ```bash
-   uvicorn core.asgi:application --port 8001 --reload
-   ```
-
----
-
-## 📜 API Documentation
-Full endpoint specs, authentication headers, request payloads, and response examples are available in [`API_DOCUMENTATION.md`](./API_DOCUMENTATION.md).
-# Constela-server

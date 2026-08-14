@@ -90,18 +90,9 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             action='generated'
         )
 
-        # Send actual email via SMTP
-        try:
-            send_mail(
-                subject="Your OTP Verification Code",
-                message=f"Your OTP code is: {otp_code}",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=False,
-            )
-            print(f"✅ OTP email sent to {user.email}")
-        except Exception as e:
-            print(f"❌ Failed to send OTP email to {user.email}: {e}")
+        # Send actual email via SMTP with HTML template
+        from api.email_service import send_signup_verification_email
+        send_signup_verification_email(user.email, otp_code, username=user.username)
         
         # Initialize default user profile
         UserProfile.objects.create(
@@ -191,6 +182,8 @@ class UserPhotoSerializer(serializers.ModelSerializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     photos = UserPhotoSerializer(many=True, read_only=True)
+    connection_status = serializers.SerializerMethodField()
+    name = serializers.SerializerMethodField()
 
     class Meta:
         model = UserProfile
@@ -198,7 +191,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'id', 'user', 'username', 'age', 'height_cm', 'weight_kg', 
             'gender', 'looking_for', 'marital_status', 'education_level', 
             'spoken_languages',
-            'city', 'country', 'latitude', 'longitude', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'onboarding_part1_completed',
+            'city', 'country', 'latitude', 'longitude', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'must_verify_face', 'onboarding_part1_completed',
             'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'has_advanced_filters', 'has_all_chat_rooms', 'neurotype_labels', 
             'is_neurodivergent', 'open_to_meet_neurodivergent', 'qualities', 
             'interests', 'recharge_methods', 'exhaust_triggers', 
@@ -206,9 +199,45 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'smoking', 'alcohol', 'pets', 'sport', 'eating_habits',
             'has_children', 'wants_children',
             'likes_push', 'messages_push', 'is_dark_mode', 
-            'preferred_language', 'is_deactivated', 'photos'
+            'preferred_language', 'is_deactivated', 'photos', 'connection_status', 'name'
         )
-        read_only_fields = ('id', 'user', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'has_advanced_filters', 'has_all_chat_rooms', 'photos')
+        read_only_fields = ('id', 'user', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'must_verify_face', 'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'has_advanced_filters', 'has_all_chat_rooms', 'photos', 'connection_status', 'name')
+
+    def get_name(self, obj):
+        return obj.display_name
+
+    def get_connection_status(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return 'none'
+        
+        try:
+            me = UserProfile.objects.get(user=request.user)
+            if me.id == obj.id:
+                return 'self'
+            
+            # Check Match
+            from api.models import Match, Friendship
+            from django.db.models import Q
+            is_match = Match.objects.filter(
+                (Q(user1=me, user2=obj) | Q(user1=obj, user2=me)),
+                status='matched'
+            ).exists()
+            if is_match:
+                return 'match'
+                
+            # Check Friendship
+            is_friend = Friendship.objects.filter(
+                (Q(sender=me, receiver=obj) | Q(sender=obj, receiver=me)),
+                status='accepted'
+            ).exists()
+            if is_friend:
+                return 'friend'
+                
+        except UserProfile.DoesNotExist:
+            pass
+            
+        return 'none'
 
 
 
