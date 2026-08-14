@@ -133,6 +133,12 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
 import dj_database_url
+import os
+import sys
+
+db_url = os.environ.get('DATABASE_URL')
+if not db_url:
+    print("CRITICAL ERROR: DATABASE_URL environment variable is missing!", file=sys.stderr)
 
 DATABASES = {
     'default': dj_database_url.config(
