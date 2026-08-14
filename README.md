@@ -26,12 +26,16 @@ We utilize several external services to power core features of the app:
 * **What it does:** Powers real-time direct messaging between matches.
 * **How it works:** Users connect to `wss://<domain>/ws/chat/?token=<jwt_token>`. The backend validates the JWT in real-time and routes messages between clients instantaneously.
 
+### 5. Brevo (Email Delivery)
+* **What it does:** Sends highly-deliverable transactional emails (like OTPs and password resets).
+* **How it works:** The backend leverages Django's built-in SMTP engine, configured to route through Brevo's SMTP relay servers (`smtp-relay.brevo.com`). This prevents our system emails from bouncing or ending up in the user's spam folder.
+
 ---
 
 ## 🚀 Deployment (Dokploy & Docker)
 
 > [!NOTE]
-> **Active Deployment:** This server is currently deployed and running via **Dokploy** on a VPS. All production backend credentials and `.env` variables can be found and managed directly within the Dokploy Environment dashboard on the VPS.
+> **Active Deployment:** This server is currently deployed and running via **Dokploy** on a VPS (accessible at [https://dokploy.constela-dating.com/](https://dokploy.constela-dating.com/)). All production backend credentials and `.env` variables can be found and managed directly within the Dokploy Environment dashboard on the VPS.
 
 Because all sensitive configurations have been stripped out of the codebase and moved to Environment Variables, deploying the app is incredibly simple.
 
@@ -53,6 +57,14 @@ You must inject the following variables into your Dokploy (or Docker) Environmen
 * `R2_SECRET_ACCESS_KEY`: Cloudflare R2 Secret Key.
 * `R2_ENDPOINT_URL`: Your S3-compatible R2 endpoint url.
 * `R2_BUCKET_NAME`: The name of your R2 bucket.
+
+#### Email Delivery (Brevo SMTP)
+* `EMAIL_HOST`: Your SMTP relay host (usually `smtp-relay.brevo.com`).
+* `EMAIL_PORT`: The SMTP port (usually `587`).
+* `EMAIL_USE_TLS`: Should be set to `True`.
+* `EMAIL_HOST_USER`: Your Brevo SMTP login email.
+* `EMAIL_HOST_PASSWORD`: Your Brevo SMTP master password.
+* `DEFAULT_FROM_EMAIL`: The default outbound address (e.g., `no-reply@yourdomain.com`).
 
 #### RevenueCat (Subscriptions)
 * `REVENUECAT_WEBHOOK_SECRET`: The authorization token set in your RevenueCat webhook dashboard to secure incoming requests.
