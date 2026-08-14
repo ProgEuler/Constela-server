@@ -46,7 +46,7 @@ You must inject the following variables into your Dokploy (or Docker) Environmen
 * `SECRET_KEY`: Your Django secret key.
 * `DEBUG`: Set to `False` in production.
 * `ALLOWED_HOSTS`: Your domain (e.g., `api.constela.com`).
-* *Database URL (if using PostgreSQL instead of SQLite)*
+* `DATABASE_URL`: A PostgreSQL connection string (e.g., `postgres://user:pass@host:5432/db`). If omitted, the server will fall back to a local SQLite file.
 
 #### Firebase (Authentication & Push Notifications)
 * `FIREBASE_CREDENTIALS_JSON`: The **full stringified JSON** of your `firebase-service-account.json` file. 
