@@ -16,10 +16,13 @@ if not firebase_admin._apps:
     
     if env_creds:
         import json
-        cred_dict = json.loads(env_creds)
-        cred = credentials.Certificate(cred_dict)
-        firebase_admin.initialize_app(cred)
-        logger.info("✅ Firebase Admin SDK initialized from Environment Variable.")
+        try:
+            cred_dict = json.loads(env_creds)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            logger.info("✅ Firebase Admin SDK initialized from Environment Variable.")
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Failed to parse FIREBASE_CREDENTIALS_JSON: {e}. env_creds was: {repr(env_creds)}")
     elif os.path.exists(cred_path):
         cred = credentials.Certificate(cred_path)
         firebase_admin.initialize_app(cred)
