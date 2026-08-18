@@ -296,6 +296,9 @@ class ForgotPasswordView(APIView):
             # Return success to prevent email enumeration
             return Response({"message": "If the account exists, a reset code has been sent."}, status=status.HTTP_200_OK)
 
+        if not user.has_usable_password():
+            return Response({"error": "This account was created with Google. Please log in using 'Continue with Google'."}, status=status.HTTP_400_BAD_REQUEST)
+
         # Generate 6-digit reset code
         import random
         code = f"{random.randint(100000, 999999)}"
