@@ -28,7 +28,8 @@ from api.views import (
     AdminUserDeleteView, AdminUserBlockView,
     AdminUserRoleUpdateView, AdminUserGiftSubscriptionView, AdminMatchesDashboardView,
     AdminSubscriptionsDashboardView, AdminPaymentsDashboardView, AdminChatRoomViewSet,
-    AdminAccountsViewSet, ChatImageUploadView, AdminActionLogViewSet, AdminModerationStatsViewSet
+    AdminAccountsViewSet, ChatImageUploadView, AdminActionLogViewSet, AdminModerationStatsViewSet,
+    NotificationListView
 )
 from api.webhooks import RevenueCatWebhookView
 
@@ -88,6 +89,10 @@ urlpatterns = [
     path('reports/create/', CreateReportView.as_view(), name='report-create'),
     path('support/create/', CreateSupportTicketView.as_view(), name='support-create'),
     path('support/my-tickets/', MySupportTicketsView.as_view(), name='support-list'),
+    
+    path('notifications/', NotificationListView.as_view(), name='notification-list'),
+
+    # Profile & Settings
     path('settings/deactivate/', DeactivateAccountView.as_view(), name='settings-deactivate'),
     path('settings/delete-account/', DeleteAccountView.as_view(), name='settings-delete-account'),
     path('settings/change-password/', ChangePasswordView.as_view(), name='settings-change-password'),

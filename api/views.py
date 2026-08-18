@@ -3571,3 +3571,21 @@ class DeleteAccountView(APIView):
         user = request.user
         user.delete()
         return Response({"message": "Account and all associated data deleted successfully."})
+
+class NotificationListView(APIView):
+    """
+    GET /api/notifications/
+    Returns the current user's chronological notification history.
+    """
+    def get(self, request):
+        from api.models import Notification
+        from api.serializers import NotificationSerializer
+        
+        # Mark all unread as read when fetched
+        unread = Notification.objects.filter(recipient=request.user, is_read=False)
+        if unread.exists():
+            unread.update(is_read=True)
+
+        notifications = Notification.objects.filter(recipient=request.user).order_by('-created_at')[:50]
+        serializer = NotificationSerializer(notifications, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)

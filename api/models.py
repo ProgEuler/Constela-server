@@ -381,3 +381,19 @@ class AdminActionLog(models.Model):
         admin_email = self.admin_user.email if self.admin_user else "Unknown Admin"
         target = f" on {self.target_user.username}" if self.target_user else ""
         return f"{admin_email} - {self.action}{target} at {self.timestamp}"
+
+
+class Notification(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    title = models.CharField(max_length=255)
+    body = models.TextField()
+    type = models.CharField(max_length=50) # e.g. "match", "message", "super_like", "system"
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"To {self.recipient.email}: {self.title}"

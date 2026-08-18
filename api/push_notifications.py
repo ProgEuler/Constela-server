@@ -93,9 +93,20 @@ def send_push_notification_to_user(user, title: str, body: str, data: Dict[str, 
     Checks profile push_token and user notification preferences.
     """
     try:
+        from api.models import Notification
+        
+        # Save to database (even if they don't have a push token, so they see it in the app)
+        notif_type = data.get("type", "system") if data else "system"
+        Notification.objects.create(
+            recipient=user,
+            title=title,
+            body=body,
+            type=notif_type
+        )
+
         profile = getattr(user, 'profile', None)
         if not profile or not profile.push_token:
-            logger.info(f"User {user.email} has no registered push token.")
+            logger.info(f"User {user.email} has no registered push token. (Notification saved to DB only)")
             return False
 
         res = send_expo_push_notification(

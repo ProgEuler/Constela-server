@@ -9,7 +9,7 @@ from api.models import (
     User, UserProfile, UserPhoto, Match, Friendship, 
     DirectMessage, ChatRoom, ChatRoomMessage, SupportTicket, 
     SupportTicketReply, Report, Block, Transaction, OTPLog, SavedMatch,
-    AdminActionLog
+    AdminActionLog, Notification
 )
 
 
@@ -454,3 +454,10 @@ class AdminActionLogSerializer(serializers.ModelSerializer):
         model = AdminActionLog
         fields = ('id', 'admin_user', 'admin_name', 'admin_email', 'target_user', 'target_name', 'action', 'details', 'timestamp')
         read_only_fields = ('id', 'timestamp')
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = ('id', 'recipient', 'title', 'body', 'type', 'is_read', 'created_at')
+        read_only_fields = ('id', 'recipient', 'created_at')
