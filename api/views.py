@@ -162,8 +162,15 @@ class GoogleAuthView(APIView):
 
         user = User.objects.filter(email__iexact=email).first()
         is_new_user = False
+        is_login = request.data.get('is_login', False)
 
         if not user:
+            if is_login:
+                return Response(
+                    {"error": "Account not found. Please sign up to create an account."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
             is_new_user = True
             base_username = email.split("@")[0].replace(".", "_")
             username = base_username
@@ -3547,3 +3554,9 @@ class AdminModerationStatsViewSet(APIView):
             },
             "moderator_activity": moderator_activity
         })
+
+class DeleteAccountView(APIView):
+    def post(self, request):
+        user = request.user
+        user.delete()
+        return Response({"message": "Account and all associated data deleted successfully."})
