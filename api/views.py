@@ -622,7 +622,9 @@ class PerfectMatchView(APIView):
         candidates_count = UserProfile.objects.filter(
             is_deactivated=False,
             is_verified=True,
-            user__role='member'
+            user__role='member',
+            user__is_staff=False,
+            user__is_superuser=False
         ).exclude(id__in=active_exclude).exclude(id__in=swiped_users).count()
         
         # If 5 or fewer profiles are left, recycle the 'disliked' matches to give them another chance
@@ -636,7 +638,9 @@ class PerfectMatchView(APIView):
         candidates = UserProfile.objects.filter(
             is_deactivated=False,
             is_verified=True,
-            user__role='member'
+            user__role='member',
+            user__is_staff=False,
+            user__is_superuser=False
         ).exclude(id__in=exclude_users)
         
         # 1. Apply Basic Filters
@@ -1007,7 +1011,9 @@ class MatchAnalysisView(APIView):
         candidates = UserProfile.objects.filter(
             is_deactivated=False,
             is_verified=True,
-            user__role='member'
+            user__role='member',
+            user__is_staff=False,
+            user__is_superuser=False
         ).exclude(id__in=exclude_users)
 
         # Filter by opposite gender based on user's profile
@@ -1392,7 +1398,9 @@ class FriendshipViewSet(viewsets.ModelViewSet):
         queryset = UserProfile.objects.filter(
             is_deactivated=False,
             is_verified=True,
-            user__role='member'
+            user__role='member',
+            user__is_staff=False,
+            user__is_superuser=False
         ).exclude(id__in=exclude_ids)
 
         # Apply search bar query (?search=Name)
