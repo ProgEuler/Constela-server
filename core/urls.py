@@ -22,7 +22,7 @@ from django.conf.urls.static import static
 from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 
 urlpatterns = [
-    path('django-admin/', admin.site.urls),  # Rename default admin path to not clash with our dashboard
+    path('secure-admin-portal/', admin.site.urls),  # Rename default admin path to not clash with our dashboard
     path('api/', include('api.urls')),
 ]
 
