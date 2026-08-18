@@ -2731,6 +2731,8 @@ class AdminUserDeleteView(APIView):
             details=f"Completely deleted user {profile.username} ({core_user.email}) and all their data."
         )
         
+        from api.utils_delete import delete_user_files
+        delete_user_files(core_user)
         core_user.delete()
         return Response({"message": "User successfully deleted."}, status=status.HTTP_204_NO_CONTENT)
 
@@ -3582,7 +3584,9 @@ class AdminModerationStatsViewSet(APIView):
 
 class DeleteAccountView(APIView):
     def post(self, request):
+        from api.utils_delete import delete_user_files
         user = request.user
+        delete_user_files(user)
         user.delete()
         return Response({"message": "Account and all associated data deleted successfully."})
 
