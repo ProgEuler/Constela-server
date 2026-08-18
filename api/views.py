@@ -1428,8 +1428,18 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             genders = [g.strip().lower() for g in gender.split(',')]
             queryset = queryset.filter(gender__in=genders)
 
-        # Order and limit suggestions
-        queryset = queryset.order_by('-profile_completion_pct', '-id')[:20]
+        # Get limit and offset for pagination
+        limit = int(request.query_params.get('limit', 20))
+        offset = int(request.query_params.get('offset', 0))
+
+        # Order suggestions
+        queryset = queryset.order_by('-profile_completion_pct', '-id')
+        
+        # Total count
+        total = queryset.count()
+        
+        # Apply pagination
+        queryset = queryset[offset:offset+limit]
 
         suggestions_data = []
         for candidate in queryset:
@@ -1467,7 +1477,11 @@ class FriendshipViewSet(viewsets.ModelViewSet):
                 "photo": photo_url
             })
 
-        return Response(suggestions_data, status=status.HTTP_200_OK)
+        return Response({
+            "results": suggestions_data,
+            "next": (offset + limit) < total,
+            "total": total
+        }, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['post'])
     def send_request(self, request):
@@ -3581,9 +3595,24 @@ class NotificationListView(APIView):
         from api.models import Notification
         from api.serializers import NotificationSerializer
         
-        notifications = Notification.objects.filter(recipient=request.user).order_by('-created_at')[:50]
+        try:
+            limit = int(request.query_params.get('limit', 20))
+            offset = int(request.query_params.get('offset', 0))
+        except ValueError:
+            limit = 20
+            offset = 0
+            
+        qs = Notification.objects.filter(recipient=request.user).order_by('-created_at')
+        total = qs.count()
+        
+        notifications = qs[offset:offset+limit]
         serializer = NotificationSerializer(notifications, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        
+        return Response({
+            'results': serializer.data,
+            'total': total,
+            'next': (offset + limit) < total
+        }, status=status.HTTP_200_OK)
 
 class MarkNotificationsReadView(APIView):
     """
