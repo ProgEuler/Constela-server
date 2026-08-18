@@ -29,7 +29,7 @@ from api.views import (
     AdminUserRoleUpdateView, AdminUserGiftSubscriptionView, AdminMatchesDashboardView,
     AdminSubscriptionsDashboardView, AdminPaymentsDashboardView, AdminChatRoomViewSet,
     AdminAccountsViewSet, ChatImageUploadView, AdminActionLogViewSet, AdminModerationStatsViewSet,
-    NotificationListView
+    NotificationListView, MarkNotificationsReadView, UnreadNotificationCountView
 )
 from api.webhooks import RevenueCatWebhookView
 
@@ -91,6 +91,8 @@ urlpatterns = [
     path('support/my-tickets/', MySupportTicketsView.as_view(), name='support-list'),
     
     path('notifications/', NotificationListView.as_view(), name='notification-list'),
+    path('notifications/read-all/', MarkNotificationsReadView.as_view(), name='notification-read-all'),
+    path('notifications/unread-count/', UnreadNotificationCountView.as_view(), name='notification-unread-count'),
 
     # Profile & Settings
     path('settings/deactivate/', DeactivateAccountView.as_view(), name='settings-deactivate'),

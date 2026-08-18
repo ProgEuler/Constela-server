@@ -3581,11 +3581,26 @@ class NotificationListView(APIView):
         from api.models import Notification
         from api.serializers import NotificationSerializer
         
-        # Mark all unread as read when fetched
-        unread = Notification.objects.filter(recipient=request.user, is_read=False)
-        if unread.exists():
-            unread.update(is_read=True)
-
         notifications = Notification.objects.filter(recipient=request.user).order_by('-created_at')[:50]
         serializer = NotificationSerializer(notifications, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+class MarkNotificationsReadView(APIView):
+    """
+    POST /api/notifications/read-all/
+    Marks all notifications for the current user as read.
+    """
+    def post(self, request):
+        from api.models import Notification
+        Notification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
+        return Response({"success": True}, status=status.HTTP_200_OK)
+
+class UnreadNotificationCountView(APIView):
+    """
+    GET /api/notifications/unread-count/
+    Returns the number of unread notifications for the current user.
+    """
+    def get(self, request):
+        from api.models import Notification
+        count = Notification.objects.filter(recipient=request.user, is_read=False).count()
+        return Response({"count": count}, status=status.HTTP_200_OK)
