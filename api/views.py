@@ -1428,10 +1428,14 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             user__is_superuser=False
         ).exclude(id__in=exclude_ids)
 
-        # Apply search bar query (?search=Name)
-        search_query = request.query_params.get('search')
+        # Search the name shown in cards as well as the account username.
+        search_query = request.query_params.get('search', '').strip()
         if search_query:
-            queryset = queryset.filter(username__icontains=search_query)
+            queryset = queryset.filter(
+                Q(username__icontains=search_query) |
+                Q(user__first_name__icontains=search_query) |
+                Q(user__last_name__icontains=search_query)
+            )
 
         # Apply filters (age_min, age_max, gender)
         age_min = request.query_params.get('age_min')

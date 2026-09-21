@@ -103,6 +103,25 @@ class FeedQueryCountTests(TestCase):
             small_query_count + 1,
         )
 
+    def test_friend_suggestions_searches_visible_name_and_username(self):
+        named_user = User.objects.create(
+            email='alicia@example.com',
+            username='quiet-star',
+            first_name='Alicia',
+            is_verified=True,
+        )
+        named_profile = UserProfile.objects.create(
+            user=named_user,
+            username='quiet-star',
+            is_verified=True,
+            gender='woman',
+        )
+
+        for search_term in ('Alicia', 'quiet-star'):
+            response = self.client.get('/api/friends/suggestions/', {'search': search_term})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual([item['id'] for item in response.data['results']], [named_profile.id])
+
 
 class PushNotificationTests(TestCase):
     def test_push_is_queued_without_blocking_notification_creation(self):
