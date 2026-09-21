@@ -46,6 +46,8 @@ CSRF_TRUSTED_ORIGINS = [
     'http://dev2.projectyard.top',
     'http://127.0.0.1:8000',
     'http://localhost:8000',
+    'https://mysimon-temperatures-baking-epa.trycloudflare.com',
+    'https://*.trycloudflare.com',
 ]
 
 CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ORIGINS', '').split(',') if os.environ.get('CORS_ORIGINS') else [
@@ -55,6 +57,8 @@ CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ORIGINS', '').split(',') if os.envir
     'http://dev2.projectyard.top',
     'http://127.0.0.1:8000',
     'http://localhost:8000',
+    'https://mysimon-temperatures-baking-epa.trycloudflare.com',
+    'https://*.trycloudflare.com',
 ]
 CORS_ALLOW_CREDENTIALS = True
 
