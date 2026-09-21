@@ -3,6 +3,7 @@ from unittest.mock import patch
 from django.db import connection
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
 from api.models import DirectMessage, Friendship, Match, Notification, User, UserPhoto, UserProfile
@@ -139,3 +140,35 @@ class PushNotificationTests(TestCase):
         self.assertTrue(queued)
         self.assertTrue(Notification.objects.filter(recipient=user).exists())
         submit.assert_called_once()
+
+
+@override_settings(STORAGES={
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
+class VoiceMessageTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create(email='voice@example.com', username='voice', is_verified=True)
+        self.profile = UserProfile.objects.create(user=self.user, username='voice', is_verified=True)
+        self.recipient_user = User.objects.create(email='listener@example.com', username='listener', is_verified=True)
+        self.recipient = UserProfile.objects.create(user=self.recipient_user, username='listener', is_verified=True)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def test_audio_upload_and_message_are_serialized(self):
+        upload = self.client.post(
+            '/api/chat/upload-audio/',
+            {'audio': SimpleUploadedFile('voice.m4a', b'audio', content_type='audio/mp4')},
+            format='multipart',
+        )
+        self.assertEqual(upload.status_code, 201)
+
+        message = self.client.post('/api/chat/direct/', {
+            'receiver': str(self.recipient.id),
+            'content': '',
+            'audio_url': upload.data['audio_url'],
+            'audio_duration': 12,
+        }, format='json')
+        self.assertEqual(message.status_code, 201)
+        self.assertEqual(message.data['audio_url'], upload.data['audio_url'])
+        self.assertEqual(message.data['audio_duration'], 12)

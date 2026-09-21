@@ -28,7 +28,7 @@ from api.views import (
     AdminUserDeleteView, AdminUserBlockView,
     AdminUserRoleUpdateView, AdminUserGiftSubscriptionView, AdminMatchesDashboardView,
     AdminSubscriptionsDashboardView, AdminPaymentsDashboardView, AdminChatRoomViewSet,
-    AdminAccountsViewSet, ChatImageUploadView, AdminActionLogViewSet, AdminModerationStatsViewSet,
+    AdminAccountsViewSet, ChatImageUploadView, ChatAudioUploadView, AdminActionLogViewSet, AdminModerationStatsViewSet,
     NotificationListView, MarkNotificationsReadView, UnreadNotificationCountView
 )
 from api.webhooks import RevenueCatWebhookView
@@ -84,6 +84,7 @@ urlpatterns = [
     # Community Chat Room Sending
     path('chat/rooms/<uuid:room_id>/send/', ChatRoomMessageCreateView.as_view(), name='chatroom-send'),
     path('chat/upload-image/', ChatImageUploadView.as_view(), name='chat-image-upload'),
+    path('chat/upload-audio/', ChatAudioUploadView.as_view(), name='chat-audio-upload'),
     
     # Safety & Settings
     path('reports/create/', CreateReportView.as_view(), name='report-create'),

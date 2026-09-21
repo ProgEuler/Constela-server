@@ -66,9 +66,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             recipient_id = data.get('recipient_id')
             content = data.get('content')
             image_url = data.get('image_url')
+            audio_url = data.get('audio_url')
+            audio_duration = data.get('audio_duration')
             reply_to_id = data.get('reply_to_id')
 
-            if not recipient_id or (not content and not image_url):
+            if not recipient_id or (not content and not image_url and not audio_url):
                 return
 
             # Check relationship & blocks
@@ -81,7 +83,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 return
 
             # Save and serialize message
-            msg_data = await self.save_direct_message(self.profile, recipient_id, content, image_url, reply_to_id)
+            msg_data = await self.save_direct_message(self.profile, recipient_id, content, image_url, audio_url, audio_duration, reply_to_id)
             if msg_data:
                 payload = {
                     'type': 'direct_message',
@@ -364,7 +366,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return True, ""
 
     @database_sync_to_async
-    def save_direct_message(self, sender_profile, receiver_id, content, image_url=None, reply_to_id=None):
+    def save_direct_message(self, sender_profile, receiver_id, content, image_url=None, audio_url=None, audio_duration=None, reply_to_id=None):
         try:
             receiver = UserProfile.objects.get(id=receiver_id)
             msg = DirectMessage.objects.create(
@@ -372,6 +374,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 receiver=receiver,
                 content=content or '',
                 image_url=image_url,
+                audio_url=audio_url,
+                audio_duration=audio_duration,
                 reply_to_id=reply_to_id
             )
             # Use DjangoJSONEncoder to handle UUIDs, datetimes etc.

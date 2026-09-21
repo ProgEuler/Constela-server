@@ -316,7 +316,7 @@ class DirectMessageSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = DirectMessage
-        fields = ('id', 'sender', 'receiver', 'sender_name', 'receiver_name', 'sender_photo', 'receiver_photo', 'content', 'timestamp', 'read_at', 'image_url', 'reply_to', 'reply_to_info', 'reaction')
+        fields = ('id', 'sender', 'receiver', 'sender_name', 'receiver_name', 'sender_photo', 'receiver_photo', 'content', 'timestamp', 'read_at', 'image_url', 'audio_url', 'audio_duration', 'reply_to', 'reply_to_info', 'reaction')
         read_only_fields = ('id', 'sender', 'timestamp', 'read_at')
 
     def get_reply_to_info(self, obj):
@@ -325,6 +325,7 @@ class DirectMessageSerializer(serializers.ModelSerializer):
                 'id': str(obj.reply_to.id),
                 'content': obj.reply_to.content,
                 'image_url': obj.reply_to.image_url,
+                'audio_url': obj.reply_to.audio_url,
                 'sender_id': str(obj.reply_to.sender_id),
                 'sender_name': obj.reply_to.sender.display_name,
             }

@@ -1730,6 +1730,7 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
         partners = UserProfile.objects.filter(id__in=relationship_dates).select_related('user').prefetch_related('photos').annotate(
             last_message_content=Subquery(latest_message.values('content')[:1]),
             last_message_image=Subquery(latest_message.values('image_url')[:1]),
+            last_message_audio=Subquery(latest_message.values('audio_url')[:1]),
             last_message_time=Subquery(latest_message.values('timestamp')[:1]),
             unread_count=Coalesce(
                 Subquery(unread_messages[:1], output_field=IntegerField()),
@@ -1741,6 +1742,8 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
         for partner in partners:
             if partner.last_message_image:
                 last_message = f"📷 Photo: {partner.last_message_content}" if partner.last_message_content else "📷 Photo"
+            elif partner.last_message_audio:
+                last_message = "🎤 Voice message"
             else:
                 last_message = partner.last_message_content or empty_message
 
@@ -1791,6 +1794,8 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
         recipient = get_object_or_404(UserProfile, id=recipient_id)
         content = request.data.get('content')
         image_url = request.data.get('image_url')
+        audio_url = request.data.get('audio_url')
+        audio_duration = request.data.get('audio_duration')
         reply_to_id = request.data.get('reply_to_id')
 
         # Check Block status
@@ -1825,6 +1830,8 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
             receiver=recipient, 
             content=content,
             image_url=image_url,
+            audio_url=audio_url,
+            audio_duration=audio_duration,
             reply_to=reply_msg
         )
         serializer = self.get_serializer(message)
@@ -3517,6 +3524,26 @@ class ChatImageUploadView(APIView):
             return Response({"image_url": file_url}, status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ChatAudioUploadView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request, *args, **kwargs):
+        from django.core.files.storage import default_storage
+
+        file = request.FILES.get('audio')
+        if not file:
+            return Response({"error": "No audio provided"}, status=status.HTTP_400_BAD_REQUEST)
+        if not (file.content_type or '').startswith('audio/') or file.size > 10 * 1024 * 1024:
+            return Response({"error": "Audio must be under 10 MB"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            file_name = default_storage.save(f"chat_audio/{file.name}", file)
+            return Response({"audio_url": default_storage.url(file_name)}, status=status.HTTP_201_CREATED)
+        except Exception:
+            return Response({"error": "Couldn't upload audio. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class AdminActionLogViewSet(viewsets.ReadOnlyModelViewSet):
     """

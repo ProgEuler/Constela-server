@@ -214,6 +214,8 @@ class DirectMessage(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
     read_at = models.DateTimeField(null=True, blank=True)
     image_url = models.URLField(max_length=500, blank=True, null=True)
+    audio_url = models.URLField(max_length=500, blank=True, null=True)
+    audio_duration = models.PositiveIntegerField(blank=True, null=True)
     reply_to = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='replies')
     reaction = models.CharField(max_length=20, blank=True, null=True)
 
