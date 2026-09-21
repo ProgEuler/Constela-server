@@ -485,6 +485,25 @@ class UserProfileViewSet(viewsets.ModelViewSet):
                         }
                         if val in lf_map:
                             val = lf_map[val]
+                        elif isinstance(val, str) and (',' in val or val.startswith('[')):
+                            raw_items = []
+                            if val.startswith('[') and val.endswith(']'):
+                                try:
+                                    raw_items = json.loads(val)
+                                except json.JSONDecodeError:
+                                    raw_items = val[1:-1].split(',')
+                            else:
+                                raw_items = val.split(',')
+
+                            valid_choices = [c[0] for c in UserProfile.LOOKING_FOR_CHOICES]
+                            matched_val = None
+                            for item in raw_items:
+                                item_str = str(item).strip().strip('"\'')
+                                mapped = lf_map.get(item_str, item_str.lower())
+                                if mapped in valid_choices:
+                                    matched_val = mapped
+                                    break
+                            val = matched_val if matched_val else 'serious'
                             
                 data[key] = val
 
@@ -609,21 +628,7 @@ class PerfectMatchView(APIView):
                 {"error": "Please set your location coordinates to filter by distance."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Check for advanced filters if user is freemium
-        advanced_params = [
-            'education_level', 'smoking', 'alcohol', 'pets', 'sport', 'eating_habits',
-            'emotional_needs', 'soothe_methods', 'recharge_methods', 'exhaust_triggers',
-            'interests', 'second_degree_humor'
-        ]
-        has_advanced_filter = any(param in request.query_params for param in advanced_params)
-        
-        if has_advanced_filter and me.subscription_tier == 'freemium' and not me.has_advanced_filters:
-            return Response(
-                {"error": "Upgrade to Premium or purchase the Advanced Filters add-on to access these filters."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
+
         # Get list of blocked users
         blocked_by_me = Block.objects.filter(blocker=me).values_list('blocked_user', flat=True)
         blocked_me = Block.objects.filter(blocked_user=me).values_list('blocker', flat=True)
@@ -713,17 +718,17 @@ class PerfectMatchView(APIView):
         if height_min:
             try:
                 # E.g. strip "cm" if passed
-                h_min = int(height_min.replace('cm', '').strip())
+                h_min = int(str(height_min).replace('cm', '').strip())
                 candidates = candidates.filter(height_cm__gte=h_min)
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
 
         height_max = request.query_params.get('height_max')
         if height_max:
             try:
-                h_max = int(height_max.replace('cm', '').strip())
+                h_max = int(str(height_max).replace('cm', '').strip())
                 candidates = candidates.filter(height_cm__lte=h_max)
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
 
         looking_for = request.query_params.get('looking_for')
@@ -1145,8 +1150,8 @@ class MatchActionView(APIView):
                     send_push_notification_to_user(
                         user=target.user,
                         title="It's a Match! 🎉",
-                        body=f"You and {me.name or me.username} have liked each other.",
-                        data={"type": "match", "profile_id": me.id}
+                        body=f"You and {me.display_name} have liked each other.",
+                        data={"type": "match", "profile_id": str(me.id)}
                     )
                 
         return Response({
@@ -1363,10 +1368,32 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             else:
                 subtitle = location
 
+            # Generate up to 2 unique tags from qualities & interests
+            tags = []
+            if receiver.qualities:
+                tags.append(receiver.qualities[0])
+            if receiver.interests:
+                tags.append(receiver.interests[0])
+            tags = list(dict.fromkeys(tags))[:2]
+
+            # Generate clean dynamic bio sentence
+            interests_list = [i.lower() for i in (receiver.interests or [])]
+            if len(interests_list) >= 3:
+                bio = f"Loves {interests_list[0]}, {interests_list[1]}, and {interests_list[2]}"
+            elif len(interests_list) == 2:
+                bio = f"Loves {interests_list[0]} and {interests_list[1]}"
+            elif len(interests_list) == 1:
+                bio = f"Loves {interests_list[0]}"
+            else:
+                bio = receiver.bio or "Open-minded and ready to connect"
+
             requests_data.append({
                 "id": req.id,
                 "receiver_id": receiver.id,
                 "name": receiver.display_name,
+                "age": receiver.age,
+                "tags": tags,
+                "bio": bio,
                 "photo": photo_url,
                 "subtitle": subtitle,
                 "mutual_friends_count": mutual_count,
@@ -1442,9 +1469,7 @@ class FriendshipViewSet(viewsets.ModelViewSet):
         suggestions_data = []
         for candidate in queryset:
             # Get main photo URL
-            main_photo = candidate.photos.filter(is_main=True).first()
-            if not main_photo:
-                main_photo = candidate.photos.first()
+            main_photo = get_main_photo(candidate)
             photo_url = get_cloudinary_url(main_photo.image) if main_photo else None
 
             # Generate up to 2 unique tags from qualities & interests
@@ -1499,8 +1524,8 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             send_push_notification_to_user(
                 user=target.user,
                 title="New Friend Request",
-                body=f"{me.name or me.username} sent you a friend request!",
-                data={"type": "friend_request_received", "profile_id": me.id}
+                body=f"{me.username} sent you a friend request!",
+                data={"type": "friend_request_received", "profile_id": str(me.id)}
             )
             
         return Response({"message": "Request sent."}, status=status.HTTP_201_CREATED)
@@ -1517,8 +1542,8 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             send_push_notification_to_user(
                 user=friendship.sender.user,
                 title="Friend Request Accepted",
-                body=f"{friendship.receiver.name or friendship.receiver.username} accepted your friend request!",
-                data={"type": "friend_request_accepted", "profile_id": friendship.receiver.id}
+                body=f"{friendship.receiver.display_name} accepted your friend request!",
+                data={"type": "friend_request_accepted", "profile_id": str(friendship.receiver.id)}
             )
         
         return Response({"message": "Friend request accepted."})

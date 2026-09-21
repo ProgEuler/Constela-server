@@ -101,8 +101,8 @@ urlpatterns = [
     path('settings/request-email-change/', RequestEmailChangeView.as_view(), name='settings-request-email-change'),
     path('settings/verify-email-change/', VerifyEmailChangeView.as_view(), name='settings-verify-email-change'),
     path('subscription/history/', TransactionHistoryView.as_view(), name='subscription-history'),
-    path('subscription/upgrade/', UpgradeSubscriptionView.as_view(), name='subscription-upgrade'),
     path('subscription/webhook/', RevenueCatWebhookView.as_view(), name='subscription-webhook'),
+    path('subscription/webhook', RevenueCatWebhookView.as_view(), name='subscription-webhook-noslash'),
     
     # Admin Endpoints
     path('admin/', include(admin_router.urls)),

@@ -141,6 +141,10 @@ class UserProfile(models.Model):
         if '@' in self.username:
             return self.username.split('@')[0]
         return self.username
+
+    @property
+    def name(self):
+        return self.display_name
         
     def clean(self):
         super().clean()
