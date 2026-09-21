@@ -1,6 +1,9 @@
+from collections import Counter, defaultdict
+
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from django.db.models import Q, Sum
+from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Sum, Value
+from django.db.models.functions import Coalesce
 from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework import viewsets, status, permissions
@@ -47,6 +50,24 @@ def get_cloudinary_url(image_field):
         return cdn_url
     except Exception:
         return url
+
+
+def get_main_photo(profile):
+    """Use prefetched photos when available and avoid two queries per profile."""
+    photos = list(profile.photos.all())
+    return next((photo for photo in photos if photo.is_main), photos[0] if photos else None)
+
+
+def get_friend_ids(profile_ids):
+    friend_ids = defaultdict(set)
+    connections = Friendship.objects.filter(
+        Q(sender_id__in=profile_ids) | Q(receiver_id__in=profile_ids),
+        status='accepted',
+    ).values_list('sender_id', 'receiver_id')
+    for sender_id, receiver_id in connections:
+        friend_ids[sender_id].add(receiver_id)
+        friend_ids[receiver_id].add(sender_id)
+    return friend_ids
 
 # 1. AUTH & ONBOARDING VIEWS
 class UserRegisterView(APIView):
@@ -376,7 +397,7 @@ class UserProfileViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         # Prevent viewing deactivated profiles
-        return UserProfile.objects.filter(is_deactivated=False)
+        return UserProfile.objects.filter(is_deactivated=False).select_related('user').prefetch_related('photos')
 
     @action(detail=False, methods=['get', 'put', 'patch'])
     def me(self, request):
@@ -390,7 +411,10 @@ class UserProfileViewSet(viewsets.ModelViewSet):
                 }
             )
         else:
-            profile = get_object_or_404(UserProfile, user=request.user)
+            profile = get_object_or_404(
+                UserProfile.objects.select_related('user').prefetch_related('photos'),
+                user=request.user,
+            )
         if request.method == 'GET':
             # Auto-cleanup user accounts that haven't completed face verification within 3 days
             cutoff = timezone.now() - timezone.timedelta(days=3)
@@ -641,7 +665,7 @@ class PerfectMatchView(APIView):
             user__role='member',
             user__is_staff=False,
             user__is_superuser=False
-        ).exclude(id__in=exclude_users)
+        ).exclude(id__in=exclude_users).select_related('user').prefetch_related('photos')
         
         # 1. Apply Basic Filters
         age_min = request.query_params.get('age_min')
@@ -874,9 +898,7 @@ class PerfectMatchView(APIView):
             score = calculate_compatibility(me, candidate)
             
             # Find main photo url
-            main_photo = candidate.photos.filter(is_main=True).first()
-            if not main_photo:
-                main_photo = candidate.photos.first()
+            main_photo = get_main_photo(candidate)
             photo_url = get_cloudinary_url(main_photo.image) if main_photo else None
 
             # Generate dynamic bio
@@ -1014,7 +1036,7 @@ class MatchAnalysisView(APIView):
             user__role='member',
             user__is_staff=False,
             user__is_superuser=False
-        ).exclude(id__in=exclude_users)
+        ).exclude(id__in=exclude_users).select_related('user').prefetch_related('photos')
 
         # Filter by opposite gender based on user's profile
         if me.gender.lower() == 'man':
@@ -1029,9 +1051,7 @@ class MatchAnalysisView(APIView):
             # Fetch photo URL
             photo_url = None
             if candidate.photos.exists():
-                main_photo = candidate.photos.filter(is_main=True).first()
-                if not main_photo:
-                    main_photo = candidate.photos.first()
+                main_photo = get_main_photo(candidate)
                 photo_url = request.build_absolute_uri(main_photo.image.url)
 
             # Build tags
@@ -1145,7 +1165,7 @@ class LikesReceivedView(APIView):
         if me.subscription_tier == 'freemium':
             return Response({"error": "Upgrade to Premium to see who liked you."}, status=status.HTTP_403_FORBIDDEN)
             
-        likes = Match.objects.filter(user2=me, status='liked')
+        likes = Match.objects.filter(user2=me, status='liked').select_related('user1__user').prefetch_related('user1__photos')
         profiles = [like.user1 for like in likes]
         serializer = UserProfileBasicSerializer(profiles, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -1153,7 +1173,7 @@ class LikesReceivedView(APIView):
 class LikesSentView(APIView):
     def get(self, request):
         me = get_object_or_404(UserProfile, user=request.user)
-        likes = Match.objects.filter(user1=me, status__in=['liked', 'matched'])
+        likes = Match.objects.filter(user1=me, status__in=['liked', 'matched']).select_related('user2__user').prefetch_related('user2__photos')
         
         data = []
         for l in likes:
@@ -1177,7 +1197,7 @@ class MutualMatchesView(APIView):
         matched = Match.objects.filter(
             Q(user1=me) | Q(user2=me),
             status='matched'
-        ).select_related('user1', 'user2').order_by('-created_at')
+        ).select_related('user1__user', 'user2__user').prefetch_related('user1__photos', 'user2__photos').order_by('-created_at')
 
         results = []
         for m in matched:
@@ -1260,7 +1280,7 @@ class SavedMatchesListView(APIView):
     """
     def get(self, request):
         me = get_object_or_404(UserProfile, user=request.user)
-        saved = SavedMatch.objects.filter(user=me).select_related('target_profile').order_by('-created_at')
+        saved = SavedMatch.objects.filter(user=me).select_related('target_profile__user').prefetch_related('target_profile__photos').order_by('-created_at')
         serializer = SavedMatchSerializer(saved, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -1276,32 +1296,21 @@ class FriendshipViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def requests(self, request):
         me = get_object_or_404(UserProfile, user=request.user)
-        incoming = Friendship.objects.filter(receiver=me, status='pending').select_related('sender')
-        
-        # Pre-fetch my accepted friend IDs to speed up mutual friend calculations
-        my_friends = set(
-            Friendship.objects.filter(Q(sender=me) | Q(receiver=me), status='accepted')
-            .values_list('sender_id', 'receiver_id')
+        incoming = list(
+            Friendship.objects.filter(receiver=me, status='pending')
+            .select_related('sender__user')
+            .prefetch_related('sender__photos')
         )
-        my_friend_ids = {s if s != me.id else r for s, r in my_friends}
+        friend_ids = get_friend_ids([me.id, *(req.sender_id for req in incoming)])
 
         requests_data = []
         for req in incoming:
             sender = req.sender
             
-            # Fetch sender's accepted friends
-            sender_friends = set(
-                Friendship.objects.filter(Q(sender=sender) | Q(receiver=sender), status='accepted')
-                .values_list('sender_id', 'receiver_id')
-            )
-            sender_friend_ids = {s if s != sender.id else r for s, r in sender_friends}
-            
-            mutual_count = len(my_friend_ids.intersection(sender_friend_ids))
+            mutual_count = len(friend_ids[me.id].intersection(friend_ids[sender.id]))
 
             # Main photo
-            main_photo = sender.photos.filter(is_main=True).first()
-            if not main_photo:
-                main_photo = sender.photos.first()
+            main_photo = get_main_photo(sender)
             photo_url = get_cloudinary_url(main_photo.image) if main_photo else None
 
             # Subtitle text: "2 mutual friends • North Bondi" or just "North Bondi"
@@ -1328,32 +1337,21 @@ class FriendshipViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def sent_requests(self, request):
         me = get_object_or_404(UserProfile, user=request.user)
-        outgoing = Friendship.objects.filter(sender=me, status='pending').select_related('receiver')
-        
-        # Pre-fetch my accepted friend IDs to speed up mutual friend calculations
-        my_friends = set(
-            Friendship.objects.filter(Q(sender=me) | Q(receiver=me), status='accepted')
-            .values_list('sender_id', 'receiver_id')
+        outgoing = list(
+            Friendship.objects.filter(sender=me, status='pending')
+            .select_related('receiver__user')
+            .prefetch_related('receiver__photos')
         )
-        my_friend_ids = {s if s != me.id else r for s, r in my_friends}
+        friend_ids = get_friend_ids([me.id, *(req.receiver_id for req in outgoing)])
 
         requests_data = []
         for req in outgoing:
             receiver = req.receiver
             
-            # Fetch receiver's accepted friends
-            receiver_friends = set(
-                Friendship.objects.filter(Q(sender=receiver) | Q(receiver=receiver), status='accepted')
-                .values_list('sender_id', 'receiver_id')
-            )
-            receiver_friend_ids = {s if s != receiver.id else r for s, r in receiver_friends}
-            
-            mutual_count = len(my_friend_ids.intersection(receiver_friend_ids))
+            mutual_count = len(friend_ids[me.id].intersection(friend_ids[receiver.id]))
 
             # Main photo
-            main_photo = receiver.photos.filter(is_main=True).first()
-            if not main_photo:
-                main_photo = receiver.photos.first()
+            main_photo = get_main_photo(receiver)
             photo_url = get_cloudinary_url(main_photo.image) if main_photo else None
 
             # Subtitle text
@@ -1433,7 +1431,7 @@ class FriendshipViewSet(viewsets.ModelViewSet):
         offset = int(request.query_params.get('offset', 0))
 
         # Order suggestions
-        queryset = queryset.order_by('-profile_completion_pct', '-id')
+        queryset = queryset.order_by('-profile_completion_pct', '-id').select_related('user').prefetch_related('photos')
         
         # Total count
         total = queryset.count()
@@ -1563,7 +1561,7 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         # Order by created_at to ensure consistent chat rooms are returned for restricted tiers
-        queryset = ChatRoom.objects.all().order_by('created_at')
+        queryset = ChatRoom.objects.prefetch_related('members__photos').order_by('created_at')
         
         if hasattr(self.request, 'user') and self.request.user.is_authenticated:
             try:
@@ -1663,101 +1661,71 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         me = get_object_or_404(UserProfile, user=self.request.user)
-        return DirectMessage.objects.filter(Q(sender=me) | Q(receiver=me)).order_by('timestamp')
+        return DirectMessage.objects.filter(
+            Q(sender=me) | Q(receiver=me)
+        ).select_related('sender__user', 'receiver__user').prefetch_related(
+            'sender__photos', 'receiver__photos'
+        ).order_by('timestamp')
 
     @action(detail=False, methods=['get'])
     def threads(self, request):
         me = get_object_or_404(UserProfile, user=request.user)
         thread_type = request.query_params.get('type', 'dating').lower().strip()
 
-        thread_data = []
-        seen_partners = set()
-
+        relationship_dates = {}
         if thread_type == 'friends':
-            # Include all accepted friends
-            friendships = Friendship.objects.filter(
-                Q(sender=me) | Q(receiver=me),
-                status='accepted'
-            ).select_related('sender', 'receiver')
-            
-            for f in friendships:
-                partner = f.receiver if f.sender == me else f.sender
-                
-                if partner.id in seen_partners:
-                    continue
-                seen_partners.add(partner.id)
-                
-                # Fetch last message
-                last_msg = DirectMessage.objects.filter(
-                    Q(sender=me, receiver=partner) | Q(sender=partner, receiver=me)
-                ).order_by('-timestamp').first()
-
-                unread_cnt = DirectMessage.objects.filter(
-                    sender=partner, receiver=me, read_at__isnull=True
-                ).count()
-
-                main_photo = partner.photos.filter(is_main=True).first() or partner.photos.first()
-                photo_url = get_cloudinary_url(main_photo.image) if main_photo else None
-
-                last_msg_text = "You are now friends! Say hi."
-                if last_msg:
-                    if last_msg.image_url:
-                        last_msg_text = f"📷 Photo: {last_msg.content}" if last_msg.content else "📷 Photo"
-                    else:
-                        last_msg_text = last_msg.content
-
-                thread_data.append({
-                    "profile": {
-                        "id": partner.id,
-                        "name": partner.display_name,
-                        "photo": photo_url
-                    },
-                    "last_message": last_msg_text,
-                    "last_message_time": last_msg.timestamp if last_msg else f.created_at,
-                    "unread_count": unread_cnt
-                })
+            relationships = Friendship.objects.filter(
+                Q(sender=me) | Q(receiver=me), status='accepted'
+            ).values('sender_id', 'receiver_id', 'created_at')
+            empty_message = "You are now friends! Say hi."
+            for relationship in relationships:
+                partner_id = relationship['receiver_id'] if relationship['sender_id'] == me.id else relationship['sender_id']
+                relationship_dates.setdefault(partner_id, relationship['created_at'])
         else:
-            # Include all matches
-            matches = Match.objects.filter(
-                Q(user1=me) | Q(user2=me),
-                status='matched'
-            ).select_related('user1', 'user2')
-            
-            for m in matches:
-                partner = m.user2 if m.user1 == me else m.user1
-                
-                if partner.id in seen_partners:
-                    continue
-                seen_partners.add(partner.id)
-                
-                last_msg = DirectMessage.objects.filter(
-                    Q(sender=me, receiver=partner) | Q(sender=partner, receiver=me)
-                ).order_by('-timestamp').first()
+            relationships = Match.objects.filter(
+                Q(user1=me) | Q(user2=me), status='matched'
+            ).values('user1_id', 'user2_id', 'created_at')
+            empty_message = "You've matched! Say hi."
+            for relationship in relationships:
+                partner_id = relationship['user2_id'] if relationship['user1_id'] == me.id else relationship['user1_id']
+                relationship_dates.setdefault(partner_id, relationship['created_at'])
 
-                unread_cnt = DirectMessage.objects.filter(
-                    sender=partner, receiver=me, read_at__isnull=True
-                ).count()
+        latest_message = DirectMessage.objects.filter(
+            Q(sender=me, receiver=OuterRef('pk')) |
+            Q(sender=OuterRef('pk'), receiver=me)
+        ).order_by('-timestamp')
+        unread_messages = DirectMessage.objects.filter(
+            sender=OuterRef('pk'), receiver=me, read_at__isnull=True
+        ).values('sender').annotate(total=Count('id')).values('total')
 
-                main_photo = partner.photos.filter(is_main=True).first() or partner.photos.first()
-                photo_url = get_cloudinary_url(main_photo.image) if main_photo else None
+        partners = UserProfile.objects.filter(id__in=relationship_dates).select_related('user').prefetch_related('photos').annotate(
+            last_message_content=Subquery(latest_message.values('content')[:1]),
+            last_message_image=Subquery(latest_message.values('image_url')[:1]),
+            last_message_time=Subquery(latest_message.values('timestamp')[:1]),
+            unread_count=Coalesce(
+                Subquery(unread_messages[:1], output_field=IntegerField()),
+                Value(0),
+            ),
+        )
 
-                last_msg_text = "You've matched! Say hi."
-                if last_msg:
-                    if last_msg.image_url:
-                        last_msg_text = f"📷 Photo: {last_msg.content}" if last_msg.content else "📷 Photo"
-                    else:
-                        last_msg_text = last_msg.content
+        thread_data = []
+        for partner in partners:
+            if partner.last_message_image:
+                last_message = f"📷 Photo: {partner.last_message_content}" if partner.last_message_content else "📷 Photo"
+            else:
+                last_message = partner.last_message_content or empty_message
 
-                thread_data.append({
-                    "profile": {
-                        "id": partner.id,
-                        "name": partner.display_name,
-                        "photo": photo_url
-                    },
-                    "last_message": last_msg_text,
-                    "last_message_time": last_msg.timestamp if last_msg else m.created_at,
-                    "unread_count": unread_cnt
-                })
+            main_photo = get_main_photo(partner)
+            thread_data.append({
+                "profile": {
+                    "id": partner.id,
+                    "name": partner.display_name,
+                    "photo": get_cloudinary_url(main_photo.image) if main_photo else None,
+                },
+                "last_message": last_message,
+                "last_message_time": partner.last_message_time or relationship_dates[partner.id],
+                "unread_count": partner.unread_count,
+            })
 
         # Sort descending by last message time
         thread_data = sorted(
@@ -1781,6 +1749,8 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
         
         messages = DirectMessage.objects.filter(
             Q(sender=me, receiver=recipient) | Q(sender=recipient, receiver=me)
+        ).select_related('sender__user', 'receiver__user').prefetch_related(
+            'sender__photos', 'receiver__photos'
         ).order_by('timestamp')
         
         serializer = self.get_serializer(messages, many=True)
@@ -2704,7 +2674,9 @@ class AdminUserListView(APIView):
 
     def get(self, request):
         query = request.query_params.get('search', '')
-        users = UserProfile.objects.filter(Q(username__icontains=query) | Q(user__email__icontains=query))
+        users = UserProfile.objects.filter(
+            Q(username__icontains=query) | Q(user__email__icontains=query)
+        ).select_related('user').prefetch_related('photos')
         serializer = UserProfileSerializer(users, many=True, context={'request': request})
         return Response(serializer.data)
 
@@ -2824,7 +2796,7 @@ class AdminDashboardActivityView(APIView):
             })
 
         # 3. New messages
-        for msg in DirectMessage.objects.order_by('-timestamp')[:10]:
+        for msg in DirectMessage.objects.select_related('sender', 'receiver').order_by('-timestamp')[:10]:
             activities.append({
                 "id": f"msg_{msg.id}",
                 "type": "message_sent",
@@ -2996,7 +2968,7 @@ class AdminMatchesDashboardView(APIView):
         matches = Match.objects.filter(
             status='matched',
             user1_id__lt=models.F('user2_id')
-        ).select_related('user1', 'user2', 'user1__user', 'user2__user')
+        ).select_related('user1', 'user2', 'user1__user', 'user2__user').prefetch_related('user1__photos', 'user2__photos')
 
         # 2. Analytics calculations
         total_matches = matches.count()
@@ -3009,14 +2981,17 @@ class AdminMatchesDashboardView(APIView):
         avg_messages = round(total_dms / total_matches, 1) if total_matches > 0 else 0.0
 
         # Calculate Active Matches (mutual matches with at least one DM)
-        dm_pairs = set()
-        for sender_id, receiver_id in DirectMessage.objects.values_list('sender_id', 'receiver_id'):
+        dm_pair_counts = Counter()
+        message_pairs = DirectMessage.objects.values('sender_id', 'receiver_id').annotate(total=Count('id'))
+        for message_pair in message_pairs:
+            sender_id = message_pair['sender_id']
+            receiver_id = message_pair['receiver_id']
             pair = tuple(sorted((sender_id, receiver_id)))
-            dm_pairs.add(pair)
+            dm_pair_counts[pair] += message_pair['total']
             
         active_matches = 0
         for match in matches:
-            if (match.user1_id, match.user2_id) in dm_pairs:
+            if (match.user1_id, match.user2_id) in dm_pair_counts:
                 active_matches += 1
 
         # 3. Apply search query filter if provided
@@ -3032,15 +3007,13 @@ class AdminMatchesDashboardView(APIView):
             comp_pct = calculate_compatibility(match.user1, match.user2)
             
             # Count DMs for this match
-            dm_count = DirectMessage.objects.filter(
-                Q(sender=match.user1, receiver=match.user2) | Q(sender=match.user2, receiver=match.user1)
-            ).count()
+            dm_count = dm_pair_counts.get((match.user1_id, match.user2_id), 0)
 
             # Profile photos helper
-            u1_photo = match.user1.photos.filter(is_main=True).first()
+            u1_photo = get_main_photo(match.user1)
             u1_photo_url = get_cloudinary_url(u1_photo.image) if u1_photo else None
             
-            u2_photo = match.user2.photos.filter(is_main=True).first()
+            u2_photo = get_main_photo(match.user2)
             u2_photo_url = get_cloudinary_url(u2_photo.image) if u2_photo else None
 
             serialized_matches.append({

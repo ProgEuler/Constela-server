@@ -210,6 +210,8 @@ class UserProfileSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
             return 'none'
+        if getattr(request.user, 'role', 'member') != 'member':
+            return 'none'
         
         try:
             me = UserProfile.objects.get(user=request.user)
@@ -329,7 +331,8 @@ class DirectMessageSerializer(serializers.ModelSerializer):
         return None
 
     def get_sender_photo(self, obj):
-        main_photo = obj.sender.photos.filter(is_main=True).first() or obj.sender.photos.first()
+        photos = list(obj.sender.photos.all())
+        main_photo = next((photo for photo in photos if photo.is_main), photos[0] if photos else None)
         if main_photo:
             request = self.context.get('request')
             if request is not None:
@@ -338,7 +341,8 @@ class DirectMessageSerializer(serializers.ModelSerializer):
         return None
 
     def get_receiver_photo(self, obj):
-        main_photo = obj.receiver.photos.filter(is_main=True).first() or obj.receiver.photos.first()
+        photos = list(obj.receiver.photos.all())
+        main_photo = next((photo for photo in photos if photo.is_main), photos[0] if photos else None)
         if main_photo:
             request = self.context.get('request')
             if request is not None:
@@ -370,7 +374,8 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         for member in members:
             if len(avatars) >= 3:
                 break
-            main_photo = member.photos.filter(is_main=True).first() or member.photos.first()
+            photos = list(member.photos.all())
+            main_photo = next((photo for photo in photos if photo.is_main), photos[0] if photos else None)
             if main_photo:
                 url = get_cloudinary_url(main_photo.image)
                 if url:
@@ -388,7 +393,8 @@ class ChatRoomMessageSerializer(serializers.ModelSerializer):
 
     def get_sender_photo(self, obj):
         from .views import get_cloudinary_url
-        main_photo = obj.sender.photos.filter(is_main=True).first() or obj.sender.photos.first()
+        photos = list(obj.sender.photos.all())
+        main_photo = next((photo for photo in photos if photo.is_main), photos[0] if photos else None)
         if main_photo:
             return get_cloudinary_url(main_photo.image)
         return None

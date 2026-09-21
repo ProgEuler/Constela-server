@@ -172,6 +172,10 @@ class Match(models.Model):
 
     class Meta:
         unique_together = ('user1', 'user2')
+        indexes = [
+            models.Index(fields=['user1', 'status', '-created_at'], name='match_u1_status_created_idx'),
+            models.Index(fields=['user2', 'status', '-created_at'], name='match_u2_status_created_idx'),
+        ]
 
     def __str__(self):
         return f"{self.user1.username} -> {self.user2.username} ({self.status})"
@@ -190,6 +194,10 @@ class Friendship(models.Model):
 
     class Meta:
         unique_together = ('sender', 'receiver')
+        indexes = [
+            models.Index(fields=['sender', 'status'], name='friend_sender_status_idx'),
+            models.Index(fields=['receiver', 'status'], name='friend_receiver_status_idx'),
+        ]
 
     def __str__(self):
         return f"Friendship: {self.sender.username} -> {self.receiver.username} ({self.status})"
@@ -204,6 +212,12 @@ class DirectMessage(models.Model):
     image_url = models.URLField(max_length=500, blank=True, null=True)
     reply_to = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='replies')
     reaction = models.CharField(max_length=20, blank=True, null=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['sender', 'receiver', '-timestamp'], name='dm_sender_receiver_time_idx'),
+            models.Index(fields=['receiver', 'sender', '-timestamp'], name='dm_receiver_sender_time_idx'),
+        ]
 
     def __str__(self):
         return f"DM: {self.sender.username} -> {self.receiver.username} at {self.timestamp}"
@@ -334,6 +348,12 @@ class Transaction(models.Model):
     payment_method = models.CharField(max_length=100, default='Visa **** 4242')
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', '-created_at'], name='tx_user_created_idx'),
+            models.Index(fields=['status', '-created_at'], name='tx_status_created_idx'),
+        ]
+
     def __str__(self):
         return f"TX #{self.id}: {self.plan_name} ({self.status}) for {self.user.username}"
 
@@ -394,6 +414,10 @@ class Notification(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['recipient', '-created_at'], name='notif_recipient_created_idx'),
+            models.Index(fields=['recipient', 'is_read'], name='notif_recipient_read_idx'),
+        ]
 
     def __str__(self):
         return f"To {self.recipient.email}: {self.title}"

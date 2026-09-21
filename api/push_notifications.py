@@ -1,5 +1,6 @@
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Union, Dict, Any
 from django.conf import settings
 
@@ -7,6 +8,7 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 
 logger = logging.getLogger(__name__)
+_push_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="fcm")
 
 # Initialize Firebase Admin SDK
 # Check if already initialized to prevent errors on hot-reloads
@@ -109,13 +111,15 @@ def send_push_notification_to_user(user, title: str, body: str, data: Dict[str, 
             logger.info(f"User {user.email} has no registered push token. (Notification saved to DB only)")
             return False
 
-        res = send_expo_push_notification(
+        # Push delivery is best-effort; never hold an API response open on FCM network latency.
+        _push_executor.submit(
+            send_expo_push_notification,
             push_tokens=profile.push_token,
             title=title,
             body=body,
-            data=data
+            data=data,
         )
-        return res.get("success", 0) > 0
+        return True
     except Exception as e:
         logger.error(f"Error sending push notification to user {user}: {e}")
         return False
