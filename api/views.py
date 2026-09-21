@@ -1385,7 +1385,7 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             elif len(interests_list) == 1:
                 bio = f"Loves {interests_list[0]}"
             else:
-                bio = receiver.bio or "Open-minded and ready to connect"
+                bio = "Open-minded and ready to connect"
 
             requests_data.append({
                 "id": req.id,
