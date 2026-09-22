@@ -1411,9 +1411,13 @@ class FriendshipViewSet(viewsets.ModelViewSet):
         blocked_me = Block.objects.filter(blocked_user=me).values_list('blocker', flat=True)
         exclude_ids = set(blocked_by_me).union(set(blocked_me))
 
-        # Get existing friendships (pending or accepted)
-        existing_friends_sender = Friendship.objects.filter(sender=me).values_list('receiver', flat=True)
-        existing_friends_receiver = Friendship.objects.filter(receiver=me).values_list('sender', flat=True)
+        # Declined requests should not permanently hide either profile from discovery.
+        existing_friends_sender = Friendship.objects.filter(
+            sender=me, status__in=['pending', 'accepted']
+        ).values_list('receiver', flat=True)
+        existing_friends_receiver = Friendship.objects.filter(
+            receiver=me, status__in=['pending', 'accepted']
+        ).values_list('sender', flat=True)
         exclude_ids = exclude_ids.union(set(existing_friends_sender)).union(set(existing_friends_receiver))
 
         # Exclude self

@@ -117,6 +117,7 @@ class FeedQueryCountTests(TestCase):
             is_verified=True,
             gender='woman',
         )
+        Friendship.objects.create(sender=named_profile, receiver=self.profile, status='declined')
 
         for search_term in ('Alicia', 'quiet-star'):
             response = self.client.get('/api/friends/suggestions/', {'search': search_term})
