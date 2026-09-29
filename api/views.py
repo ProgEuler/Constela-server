@@ -611,15 +611,25 @@ class UserProfileViewSet(viewsets.ModelViewSet):
                 user_updated = True
                 
             if "email" in request.data:
-                new_email = request.data.get("email")
-                if new_email and new_email != user_obj.email:
+                new_email = (request.data.get("email") or "").strip().lower()
+                if not new_email:
+                    return Response({"error": "Email address cannot be empty.", "email": ["Email cannot be empty."]}, status=status.HTTP_400_BAD_REQUEST)
+                from django.core.validators import validate_email
+                from django.core.exceptions import ValidationError
+                try:
+                    validate_email(new_email)
+                except ValidationError:
+                    return Response({"error": "Please enter a valid email address.", "email": ["Please enter a valid email address."]}, status=status.HTTP_400_BAD_REQUEST)
+                
+                if new_email != user_obj.email:
                     if User.objects.filter(email=new_email).exclude(id=user_obj.id).exists():
-                        return Response({"email": ["This email is already in use."]}, status=status.HTTP_400_BAD_REQUEST)
+                        return Response({"error": "This email is already in use.", "email": ["This email is already in use."]}, status=status.HTTP_400_BAD_REQUEST)
                     user_obj.email = new_email
                     user_updated = True
             
             if user_updated:
                 user_obj.save()
+                profile_obj.user = user_obj
             
             if 'face_verification_status' in request.data:
                 new_status = request.data.get('face_verification_status')
