@@ -41,7 +41,7 @@ class ChatSocketPrivacyTest(TransactionTestCase):
         sockets = []
         for token in self.tokens:
             socket = WebsocketCommunicator(application, f'/ws/chat/?token={token}')
-            connected, _ = await socket.connect()
+            connected, _ = await socket.connect(timeout=10)
             self.assertTrue(connected)
             self.assertEqual((await socket.receive_json_from(timeout=10))['type'], 'initial_presence')
             sockets.append(socket)
@@ -119,7 +119,7 @@ class ChatSocketPrivacyTest(TransactionTestCase):
         second_sender_device = WebsocketCommunicator(
             application, f'/ws/chat/?token={self.tokens[0]}'
         )
-        connected, _ = await second_sender_device.connect()
+        connected, _ = await second_sender_device.connect(timeout=10)
         self.assertTrue(connected)
         self.assertEqual(
             (await second_sender_device.receive_json_from(timeout=10))['type'], 'initial_presence'
@@ -136,7 +136,7 @@ class ChatSocketPrivacyTest(TransactionTestCase):
 
     async def _subscription_policy_scenario(self):
         socket = WebsocketCommunicator(application, f'/ws/chat/?token={self.tokens[0]}')
-        connected, _ = await socket.connect()
+        connected, _ = await socket.connect(timeout=10)
         self.assertTrue(connected)
         self.assertEqual((await socket.receive_json_from(timeout=10))['type'], 'initial_presence')
 
