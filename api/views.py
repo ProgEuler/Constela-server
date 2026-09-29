@@ -613,8 +613,6 @@ class UserProfileViewSet(viewsets.ModelViewSet):
             if "email" in request.data:
                 new_email = request.data.get("email")
                 if new_email and new_email != user_obj.email:
-                    from django.contrib.auth import get_user_model
-                    User = get_user_model()
                     if User.objects.filter(email=new_email).exclude(id=user_obj.id).exists():
                         return Response({"email": ["This email is already in use."]}, status=status.HTTP_400_BAD_REQUEST)
                     user_obj.email = new_email
