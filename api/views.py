@@ -603,6 +603,26 @@ class UserProfileViewSet(viewsets.ModelViewSet):
         if serializer.is_valid():
             profile_obj = serializer.save()
             
+            user_obj = profile_obj.user
+            user_updated = False
+            
+            if "first_name" in request.data:
+                user_obj.first_name = request.data.get("first_name")
+                user_updated = True
+                
+            if "email" in request.data:
+                new_email = request.data.get("email")
+                if new_email and new_email != user_obj.email:
+                    from django.contrib.auth import get_user_model
+                    User = get_user_model()
+                    if User.objects.filter(email=new_email).exclude(id=user_obj.id).exists():
+                        return Response({"email": ["This email is already in use."]}, status=status.HTTP_400_BAD_REQUEST)
+                    user_obj.email = new_email
+                    user_updated = True
+            
+            if user_updated:
+                user_obj.save()
+            
             if 'face_verification_status' in request.data:
                 new_status = request.data.get('face_verification_status')
                 if new_status == 'skipped' and profile_obj.face_verification_status in ['not_submitted', 'skipped']:
