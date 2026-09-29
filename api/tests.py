@@ -135,16 +135,75 @@ class PushNotificationTests(TestCase):
                 user,
                 title='New Friend Request',
                 body='Someone sent you a friend request',
-                data={'type': 'friend_request_received'},
+                data={
+                    'type': 'friend_request_received',
+                    'profile_id': 'sender-id',
+                    'sender_photo': 'https://expired.example/photo.jpg',
+                },
             )
 
         self.assertTrue(queued)
-        self.assertTrue(Notification.objects.filter(recipient=user).exists())
+        notification = Notification.objects.get(recipient=user)
+        self.assertNotIn('sender_photo', notification.data)
         submit.assert_called_once()
+
+    def test_notification_list_returns_a_fresh_sender_photo(self):
+        recipient = User.objects.create(email='recipient@example.com', username='recipient')
+        UserProfile.objects.create(user=recipient, username='recipient')
+        sender = User.objects.create(email='sender@example.com', username='sender')
+        sender_profile = UserProfile.objects.create(user=sender, username='sender')
+        UserPhoto.objects.create(
+            profile=sender_profile,
+            image='profile_photos/sender.jpg',
+            is_main=True,
+        )
+        Notification.objects.create(
+            recipient=recipient,
+            title='New Friend Request',
+            body='Sender sent you a friend request',
+            type='friend_request_received',
+            data={
+                'profile_id': str(sender_profile.id),
+                'sender_photo': 'https://expired.example/photo.jpg',
+            },
+        )
+        client = APIClient()
+        client.force_authenticate(recipient)
+
+        with patch('api.views.get_cloudinary_url', return_value='https://fresh.example/photo.jpg'):
+            response = client.get('/api/notifications/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data['results'][0]['data']['sender_photo'],
+            'https://fresh.example/photo.jpg',
+        )
+
+
+@override_settings(
+    GOOGLE_OAUTH_WEB_CLIENT_ID='constela-android-web-client.apps.googleusercontent.com',
+)
+class GoogleAuthTests(TestCase):
+    def test_google_token_must_match_constela_client_id(self):
+        with patch('firebase_admin.auth.verify_id_token', side_effect=ValueError), patch('requests.get') as get:
+            get.return_value.status_code = 200
+            get.return_value.json.return_value = {
+                'aud': 'constela-android-web-client.apps.googleusercontent.com',
+                'email': 'google-user@example.com',
+                'name': 'Google User',
+            }
+            accepted = self.client.post('/api/auth/google/', {'id_token': 'valid-token'}, format='json')
+
+            get.return_value.json.return_value['aud'] = 'another-app.apps.googleusercontent.com'
+            rejected = self.client.post('/api/auth/google/', {'id_token': 'wrong-audience'}, format='json')
+
+        self.assertEqual(accepted.status_code, 200)
+        self.assertTrue(User.objects.filter(email='google-user@example.com').exists())
+        self.assertEqual(rejected.status_code, 400)
 
 
 @override_settings(STORAGES={
-    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'default': {'BACKEND': 'django.core.files.storage.InMemoryStorage'},
     'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
 })
 class VoiceMessageTests(TestCase):
@@ -153,6 +212,7 @@ class VoiceMessageTests(TestCase):
         self.profile = UserProfile.objects.create(user=self.user, username='voice', is_verified=True)
         self.recipient_user = User.objects.create(email='listener@example.com', username='listener', is_verified=True)
         self.recipient = UserProfile.objects.create(user=self.recipient_user, username='listener', is_verified=True)
+        Friendship.objects.create(sender=self.profile, receiver=self.recipient, status='accepted')
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
@@ -168,8 +228,157 @@ class VoiceMessageTests(TestCase):
             'receiver': str(self.recipient.id),
             'content': '',
             'audio_url': upload.data['audio_url'],
+            'audio_ref': upload.data['audio_ref'],
             'audio_duration': 12,
         }, format='json')
         self.assertEqual(message.status_code, 201)
         self.assertEqual(message.data['audio_url'], upload.data['audio_url'])
+        self.assertIsNotNone(message.data['audio_url_expires_at'])
         self.assertEqual(message.data['audio_duration'], 12)
+        self.assertTrue(DirectMessage.objects.get(id=message.data['id']).audio_url.startswith('chat_audio/'))
+
+    def test_image_upload_and_message_store_a_stable_key(self):
+        upload = self.client.post(
+            '/api/chat/upload-image/',
+            {'image': SimpleUploadedFile('photo.jpg', b'image', content_type='image/jpeg')},
+            format='multipart',
+        )
+        self.assertEqual(upload.status_code, 201)
+
+        message = self.client.post('/api/chat/direct/', {
+            'receiver': str(self.recipient.id),
+            'image_url': upload.data['image_url'],
+            'image_ref': upload.data['image_ref'],
+        }, format='json')
+        self.assertEqual(message.status_code, 201)
+        self.assertEqual(message.data['image_url'], upload.data['image_url'])
+        self.assertIsNotNone(message.data['image_url_expires_at'])
+        self.assertTrue(DirectMessage.objects.get(id=message.data['id']).image_url.startswith('chat_images/'))
+
+    def test_expired_legacy_r2_url_is_refreshed_in_history(self):
+        legacy_url = (
+            'https://account.r2.cloudflarestorage.com/bucket/chat_audio/old.m4a'
+            '?X-Amz-Date=20260924T120000Z&X-Amz-Expires=3600&X-Amz-Signature=expired'
+        )
+        DirectMessage.objects.create(
+            sender=self.profile,
+            receiver=self.recipient,
+            audio_url=legacy_url,
+            audio_duration=4,
+        )
+
+        with override_settings(
+            AWS_S3_ENDPOINT_URL='https://account.r2.cloudflarestorage.com',
+            AWS_STORAGE_BUCKET_NAME='bucket',
+        ), patch('api.chat_media.default_storage.url', return_value='https://fresh.example/audio') as storage_url:
+            history = self.client.get(f'/api/chat/direct/history/{self.recipient.id}/')
+
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.data[0]['audio_url'], 'https://fresh.example/audio')
+        self.assertIsNotNone(history.data[0]['audio_url_expires_at'])
+        storage_url.assert_called_once_with('chat_audio/old.m4a')
+
+    def test_expired_legacy_image_url_is_refreshed_in_history(self):
+        legacy_url = (
+            'https://account.r2.cloudflarestorage.com/bucket/chat_images/old.jpg'
+            '?X-Amz-Date=20260924T120000Z&X-Amz-Expires=3600&X-Amz-Signature=expired'
+        )
+        DirectMessage.objects.create(
+            sender=self.profile,
+            receiver=self.recipient,
+            image_url=legacy_url,
+        )
+
+        with override_settings(
+            AWS_S3_ENDPOINT_URL='https://account.r2.cloudflarestorage.com',
+            AWS_STORAGE_BUCKET_NAME='bucket',
+        ), patch('api.chat_media.default_storage.url', return_value='https://fresh.example/image') as storage_url:
+            history = self.client.get(f'/api/chat/direct/history/{self.recipient.id}/')
+
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.data[0]['image_url'], 'https://fresh.example/image')
+        self.assertIsNotNone(history.data[0]['image_url_expires_at'])
+        storage_url.assert_called_once_with('chat_images/old.jpg')
+
+    def test_audio_refresh_requires_a_conversation_participant(self):
+        message = DirectMessage.objects.create(
+            sender=self.profile,
+            receiver=self.recipient,
+            audio_url='chat_audio/private.m4a',
+            audio_duration=3,
+        )
+        allowed = self.client.get(f'/api/chat/direct/{message.id}/')
+        self.assertEqual(allowed.status_code, 200)
+        self.assertIsNotNone(allowed.data['audio_url_expires_at'])
+
+        outsider_user = User.objects.create(email='outsider@example.com', username='outsider', is_verified=True)
+        UserProfile.objects.create(user=outsider_user, username='outsider', is_verified=True)
+        self.client.force_authenticate(outsider_user)
+        denied = self.client.get(f'/api/chat/direct/{message.id}/')
+        self.assertEqual(denied.status_code, 404)
+
+    def test_invalid_audio_reference_is_rejected(self):
+        response = self.client.post('/api/chat/direct/', {
+            'receiver': str(self.recipient.id),
+            'audio_url': '/media/chat_audio/voice.m4a',
+            'audio_ref': 'tampered',
+            'audio_duration': 2,
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(DirectMessage.objects.exists())
+
+    def test_invalid_image_reference_is_rejected(self):
+        response = self.client.post('/api/chat/direct/', {
+            'receiver': str(self.recipient.id),
+            'image_url': '/media/chat_images/photo.jpg',
+            'image_ref': 'tampered',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(DirectMessage.objects.exists())
+
+    def test_history_prefetch_does_not_mark_messages_read(self):
+        message = DirectMessage.objects.create(
+            sender=self.recipient,
+            receiver=self.profile,
+            content='unread',
+        )
+
+        prefetched = self.client.get(
+            f'/api/chat/direct/history/{self.recipient.id}/?prefetch=1'
+        )
+        self.assertEqual(prefetched.status_code, 200)
+        message.refresh_from_db()
+        self.assertIsNone(message.read_at)
+
+        opened = self.client.get(f'/api/chat/direct/history/{self.recipient.id}/')
+        self.assertEqual(opened.status_code, 200)
+        message.refresh_from_db()
+        self.assertIsNotNone(message.read_at)
+
+    def test_history_loads_fifty_messages_then_fetches_older_page(self):
+        created = [
+            DirectMessage.objects.create(
+                sender=self.profile,
+                receiver=self.recipient,
+                content=f'message {index}',
+            )
+            for index in range(55)
+        ]
+
+        first_page = self.client.get(f'/api/chat/direct/history/{self.recipient.id}/')
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(len(first_page.data), 50)
+        self.assertEqual(first_page.data[0]['id'], str(created[-1].id))
+
+        second_page = self.client.get(
+            f'/api/chat/direct/history/{self.recipient.id}/',
+            {'before': first_page.data[-1]['timestamp']},
+        )
+        self.assertEqual(second_page.status_code, 200)
+        self.assertEqual(len(second_page.data), 5)
+        self.assertFalse(
+            {message['id'] for message in first_page.data}
+            & {message['id'] for message in second_page.data}
+        )

@@ -84,3 +84,4 @@ coverage.xml
 # Custom Exclusions
 # ========================
 utils_and_misc/
+chat_audio/

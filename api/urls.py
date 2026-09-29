@@ -16,22 +16,22 @@ class SafeTokenRefreshView(TokenRefreshView):
 
 from api.serializers import ChahiraTokenObtainPairView
 from api.views import (
-    UserRegisterView, OTPVerifyView, ResendOTPView, ForgotPasswordView, ResetPasswordView, CheckUsernameView, FaceVerifyView, FaceDetectView, GoogleAuthView, RegisterPushTokenView,
+    UserRegisterView, OTPVerifyView, ResendOTPView, ForgotPasswordView, ResetPasswordView, VerifyPasswordResetCodeView, CheckUsernameView, FaceVerifyView, FaceDetectView, GoogleAuthView, RegisterPushTokenView,
     UserProfileViewSet, UserPhotoViewSet,
     PerfectMatchView, MatchAnalysisView, MatchActionView, LikesReceivedView, LikesSentView, MutualMatchesView,
     SaveMatchView, UnsaveMatchView, SavedMatchesListView, UnmatchUserView, UnfriendUserView,
     FriendshipViewSet, ChatRoomViewSet, ChatRoomMessageCreateView,
     DirectMessageViewSet, BlockViewSet, DeactivateAccountView, DeleteAccountView,
-    ChangePasswordView, RequestEmailChangeView, VerifyEmailChangeView, TransactionHistoryView, UpgradeSubscriptionView, CreateReportView, CreateSupportTicketView, MySupportTicketsView,
+    ChangePasswordView, RequestEmailChangeView, VerifyEmailChangeView, TransactionHistoryView, CreateReportView, CreateSupportTicketView, MySupportTicketsView,
     AdminTicketViewSet, AdminReportViewSet, AdminVerificationViewSet,
     AdminUserListView, AdminDashboardStatsView, AdminDashboardActivityView, AdminTransactionListView,
     AdminUserDeleteView, AdminUserBlockView,
     AdminUserRoleUpdateView, AdminUserGiftSubscriptionView, AdminMatchesDashboardView,
-    AdminSubscriptionsDashboardView, AdminPaymentsDashboardView, AdminChatRoomViewSet,
+    AdminSubscriptionsDashboardView, AdminSubscriptionTiersView, AdminPaymentsDashboardView, AdminChatRoomViewSet,
     AdminAccountsViewSet, ChatImageUploadView, ChatAudioUploadView, AdminActionLogViewSet, AdminModerationStatsViewSet,
     NotificationListView, MarkNotificationsReadView, UnreadNotificationCountView
 )
-from api.webhooks import RevenueCatWebhookView
+from api.webhooks import RevenueCatWebhookView, SubscriptionSyncView
 
 router = DefaultRouter()
 router.register(r'profiles', UserProfileViewSet, basename='profile')
@@ -49,6 +49,7 @@ admin_router.register(r'accounts', AdminAccountsViewSet, basename='admin-account
 admin_router.register(r'logs', AdminActionLogViewSet, basename='admin-logs')
 
 urlpatterns = [
+    path('subscription/sync/', SubscriptionSyncView.as_view(), name='subscription-sync'),
     # Auth Endpoints
     path('auth/signup/', UserRegisterView.as_view(), name='auth-signup'),
     path('auth/verify-otp/', OTPVerifyView.as_view(), name='auth-verify-otp'),
@@ -61,6 +62,7 @@ urlpatterns = [
     path('auth/face-verify/', FaceVerifyView.as_view(), name='face-verify'),
     path('auth/face-detect/', FaceDetectView.as_view(), name='face-detect'),
     path('auth/forgot-password/', ForgotPasswordView.as_view(), name='auth-forgot-password'),
+    path('auth/verify-reset-code/', VerifyPasswordResetCodeView.as_view(), name='auth-verify-reset-code'),
     path('auth/reset-password/', ResetPasswordView.as_view(), name='auth-reset-password'),
     
     # Profile Endpoints
@@ -112,6 +114,7 @@ urlpatterns = [
     path('admin/transactions/', AdminTransactionListView.as_view(), name='admin-transactions-list'),
     path('admin/matches/', AdminMatchesDashboardView.as_view(), name='admin-matches-dashboard'),
     path('admin/subscriptions/', AdminSubscriptionsDashboardView.as_view(), name='admin-subscriptions-dashboard'),
+    path('admin/subscriptions/tiers/', AdminSubscriptionTiersView.as_view(), name='admin-subscriptions-tiers'),
     path('admin/payments/', AdminPaymentsDashboardView.as_view(), name='admin-payments-dashboard'),
     path('admin/moderation/stats/', AdminModerationStatsViewSet.as_view(), name='admin-moderation-stats'),
     path('admin/users/<uuid:profile_id>/role/', AdminUserRoleUpdateView.as_view(), name='admin-user-role-update'),

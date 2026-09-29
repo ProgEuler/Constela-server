@@ -1,151 +1,120 @@
-import json
+import hashlib
+import hmac
 import logging
-import datetime
-from django.utils import timezone
+import time
+from decimal import Decimal
 from django.conf import settings
-from rest_framework.views import APIView
+from django.db import transaction
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework import status
-from api.models import UserProfile, Transaction
+from rest_framework.throttling import UserRateThrottle
+from rest_framework.views import APIView
+from api.models import RevenueCatEvent, Transaction, UserProfile
+from api.subscriptions import profile_ids, sync_subscription
 
 logger = logging.getLogger(__name__)
 
+
 class RevenueCatWebhookView(APIView):
-    """
-    POST /api/subscription/webhook/
-    Listens for RevenueCat subscription events and updates UserProfile accordingly.
-    """
-    authentication_classes = []  # Public endpoint
+    authentication_classes = []
     permission_classes = []
+    throttle_classes = []
 
     def post(self, request):
-        # 1. Verify webhook secret
-        secret = getattr(settings, 'REVENUECAT_WEBHOOK_SECRET', None) or os.environ.get('REVENUECAT_WEBHOOK_SECRET')
-        valid_tokens = {s for s in [secret, 'rc_sec_50c5bde9be01664c9a3d5b4f229d7098c0516b6bffa19f3d'] if s}
-        valid_auths = set()
-        for tok in valid_tokens:
-            valid_auths.add(f"Bearer {tok}")
-            valid_auths.add(tok)
-
-        auth_header = request.headers.get('Authorization')
-        
-        if valid_tokens and auth_header not in valid_auths:
-            logger.warning("Unauthorized RevenueCat Webhook attempt")
-            return Response({"error": "Unauthorized"}, status=status.HTTP_401_UNAUTHORIZED)
-
-        # 2. Parse payload
-        try:
-            payload = request.data
-            event = payload.get('event')
-            if not event:
-                return Response({"error": "Missing event data"}, status=status.HTTP_400_BAD_REQUEST)
-            
-            event_type = event.get('type')
-            app_user_id = event.get('app_user_id')
-            entitlement_ids = event.get('entitlement_ids', [])
-            
-            if not app_user_id:
-                return Response({"error": "Missing app_user_id"}, status=status.HTTP_400_BAD_REQUEST)
-
-            logger.info(f"Received RevenueCat event {event_type} for user {app_user_id}")
-            
-            # Handle RevenueCat Test Webhooks from dashboard
-            if event_type == 'TEST':
-                logger.info("Successfully received RevenueCat TEST webhook event")
-                return Response({"status": "test_received"}, status=status.HTTP_200_OK)
-
-            # 3. Find UserProfile
+        secret = (settings.REVENUECAT_WEBHOOK_SECRET or '').strip()
+        if not secret:
+            return Response({'error': 'Webhook is not configured'}, status=503)
+        header = (request.headers.get('Authorization') or '').strip()
+        token = header[7:].strip() if header.lower().startswith('bearer ') else header
+        expected = secret[7:].strip() if secret.lower().startswith('bearer ') else secret
+        if not hmac.compare_digest(token.encode(), expected.encode()):
+            return Response({'error': 'Unauthorized'}, status=401)
+        if settings.REVENUECAT_SIGNING_SECRET:
             try:
-                profile = UserProfile.objects.get(id=app_user_id)
-            except UserProfile.DoesNotExist:
-                logger.error(f"UserProfile with id {app_user_id} not found in database")
-                return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+                parts = dict(part.strip().split('=', 1) for part in request.headers.get('X-RevenueCat-Webhook-Signature', '').split(','))
+                digest = hmac.new(settings.REVENUECAT_SIGNING_SECRET.encode(), parts['t'].encode() + b'.' + request.body, hashlib.sha256).hexdigest()
+                if abs(time.time() - int(parts['t'])) > 300 or not hmac.compare_digest(digest, parts['v1']):
+                    raise ValueError()
+            except (ValueError, KeyError):
+                return Response({'error': 'Invalid signature'}, status=401)
+        event = request.data.get('event') if isinstance(request.data, dict) else None
+        if not isinstance(event, dict) or not isinstance(event.get('type'), str):
+            return Response({'error': 'Invalid event'}, status=400)
+        event_type = event['type']
+        if event_type == 'TEST':
+            return Response({'status': 'test_received'})
+        event_id = event.get('id')
+        if not isinstance(event_id, str) or not 0 < len(event_id) <= 255 or len(event_type) > 100:
+            return Response({'error': 'Invalid event ID or type'}, status=400)
+        if settings.REVENUECAT_APP_IDS and event.get('app_id') not in settings.REVENUECAT_APP_IDS:
+            return Response({'error': 'Unexpected app'}, status=403)
+        if event.get('environment') == 'SANDBOX' and not settings.REVENUECAT_ALLOW_SANDBOX:
+            return Response({'status': 'sandbox_ignored'})
+        candidates = [] if event_type == 'TRANSFER' else [event.get('app_user_id'), event.get('original_app_user_id')]
+        for key in (('transferred_from', 'transferred_to') if event_type == 'TRANSFER' else ('aliases',)):
+            values = event.get(key) or []
+            if not isinstance(values, list) or len(values) > 100:
+                return Response({'error': 'Invalid customer IDs'}, status=400)
+            candidates.extend(values)
+        ids = profile_ids(candidates)
+        if (event_type != 'TRANSFER' and len(ids) > 1) or len(ids) > 4:
+            logger.error('RevenueCat event %s has ambiguous customer ownership', event_id)
+            return Response({'error': 'Customer ownership requires review'}, status=503)
+        if not ids:
+            logger.warning('RevenueCat event %s has no matching immutable profile ID', event_id)
+            return Response({'error': 'Customer not found; retry delivery'}, status=503)
+        try:
+            with transaction.atomic():
+                _, created = RevenueCatEvent.objects.get_or_create(id=event_id, defaults={'event_type': event_type})
+                if not created:
+                    return Response({'status': 'duplicate'})
+                profiles = [sync_subscription(profile_id) for profile_id in ids]
+                if event_type in {'INITIAL_PURCHASE', 'RENEWAL', 'NON_RENEWING_PURCHASE'} and event.get('price') is not None:
+                    amount = Decimal(str(event['price']))
+                    if not amount.is_finite() or amount < 0 or amount >= Decimal('100000000'):
+                        raise ValueError('Invalid transaction amount')
+                    owner = next((p for p in profiles if str(p.id) == event.get('app_user_id')), None)
+                    if owner is None and len(profiles) == 1:
+                        owner = profiles[0]
+                    if owner:
+                        txid = str(event.get('transaction_id') or event_id)
+                        key = hashlib.sha256(f"{event.get('app_id')}:{event.get('environment')}:{event.get('store')}:{txid}".encode()).hexdigest()
+                        legacy = Transaction.objects.filter(user=owner, stripe_charge_id=txid, revenuecat_charge_key__isnull=True, plan_name__startswith='RevenueCat:').order_by('created_at', 'id').first()
+                        if legacy and not Transaction.objects.filter(revenuecat_charge_key=key).exists():
+                            legacy.revenuecat_charge_key = key
+                            legacy.payment_method = str(event.get('store') or 'RevenueCat')[:100]
+                            legacy.save(update_fields=['revenuecat_charge_key', 'payment_method'])
+                        Transaction.objects.get_or_create(revenuecat_charge_key=key, defaults={
+                            'user': owner, 'plan_name': str(event.get('product_id') or 'RevenueCat purchase')[:100],
+                            'amount': amount, 'status': 'successful', 'stripe_charge_id': txid[:255],
+                            'payment_method': str(event.get('store') or 'RevenueCat')[:100],
+                        })
+                if event_type == 'CANCELLATION' and event.get('cancel_reason') == 'CUSTOMER_SUPPORT' and event.get('transaction_id'):
+                    Transaction.objects.filter(user_id__in=ids, stripe_charge_id=event['transaction_id']).update(status='refunded')
+                if event_type == 'REFUND_REVERSED' and event.get('transaction_id'):
+                    Transaction.objects.filter(user_id__in=ids, stripe_charge_id=event['transaction_id']).update(status='successful')
+            return Response({'status': 'success'})
+        except Exception:
+            logger.exception('RevenueCat event %s failed; transaction rolled back', event_id)
+            return Response({'error': 'Subscription sync unavailable; retry delivery'}, status=503)
 
-            # 4. Handle Purchase/Expiration Lifecycle
-            expiration_ms = event.get('expiration_at_ms')
-            store = event.get('store')
-            product_id = event.get('product_id')
-            expires_at = None
-            if expiration_ms:
-                expires_at = datetime.datetime.fromtimestamp(expiration_ms / 1000.0, tz=datetime.timezone.utc)
 
-            is_grant_event = event_type in ['INITIAL_PURCHASE', 'RENEWAL', 'PRODUCT_CHANGE', 'NON_RENEWING_PURCHASE', 'TRANSFER']
-            is_revoke_event = event_type in ['EXPIRATION', 'CANCELLATION', 'REVOCATION']
+class SubscriptionSyncThrottle(UserRateThrottle):
+    rate = '100/min'
 
-            # Fallback: if entitlements array is empty, try to guess from product_id
-            if not entitlement_ids and product_id:
-                if 'plus' in product_id:
-                    entitlement_ids = ['premium_plus']
-                elif 'light' in product_id:
-                    entitlement_ids = ['premium_light']
-                elif 'filters' in product_id:
-                    entitlement_ids = ['add_on_advanced_filters']
-                elif 'chat' in product_id or 'chatrooms' in product_id:
-                    entitlement_ids = ['add_on_chat_rooms']
-                elif 'match' in product_id:
-                    entitlement_ids = ['add_on_match_analysis']
 
-            for entitlement in entitlement_ids:
-                if entitlement == 'premium_plus':
-                    if is_grant_event:
-                        profile.subscription_tier = 'plus'
-                        profile.subscription_expires = expires_at
-                        profile.subscription_product_id = product_id
-                        profile.subscription_store = store
-                    elif is_revoke_event:
-                        profile.subscription_tier = 'freemium'
-                        profile.subscription_expires = None
-                        profile.subscription_product_id = None
-                        profile.subscription_store = None
-                
-                elif entitlement == 'premium_light':
-                    if is_grant_event:
-                        profile.subscription_tier = 'light'
-                        profile.subscription_expires = expires_at
-                        profile.subscription_product_id = product_id
-                        profile.subscription_store = store
-                    elif is_revoke_event:
-                        profile.subscription_tier = 'freemium'
-                        profile.subscription_expires = None
-                        profile.subscription_product_id = None
-                        profile.subscription_store = None
-                
-                elif entitlement == 'add_on_advanced_filters' or 'filters' in entitlement or 'filters' in product_id:
-                    if is_grant_event:
-                        profile.has_advanced_filters = True
-                    elif is_revoke_event:
-                        profile.has_advanced_filters = False
-                
-                elif entitlement == 'add_on_chat_rooms' or 'chat' in entitlement or 'chatrooms' in product_id:
-                    if is_grant_event:
-                        profile.has_all_chat_rooms = True
-                    elif is_revoke_event:
-                        profile.has_all_chat_rooms = False
-                
-                elif entitlement == 'add_on_match_analysis' or 'match' in entitlement or 'match' in product_id:
-                    if is_grant_event:
-                        profile.has_match_analysis = True
-                    elif is_revoke_event:
-                        profile.has_match_analysis = False
+class SubscriptionSyncView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [SubscriptionSyncThrottle]
 
-            profile.save()
-
-            # 5. Log Transaction
-            price = event.get('price')
-            currency = event.get('currency', 'USD')
-            transaction_id = event.get('transaction_id', f"rc_{event.get('id')}")
-
-            if is_grant_event and price is not None:
-                Transaction.objects.create(
-                    user=profile,
-                    plan_name=f"RevenueCat: {', '.join(entitlement_ids)}",
-                    amount=price,
-                    status='successful',
-                    stripe_charge_id=transaction_id
-                )
-
-            return Response({"status": "success"}, status=status.HTTP_200_OK)
-
-        except Exception as e:
-            logger.exception("Error processing RevenueCat Webhook")
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    def post(self, request):
+        from api.serializers import UserProfileSerializer
+        try:
+            profile = UserProfile.objects.get(user=request.user)
+            profile = sync_subscription(profile.id)
+        except UserProfile.DoesNotExist:
+            return Response({'error': 'Profile not found'}, status=404)
+        except Exception:
+            logger.exception('Authenticated subscription sync failed')
+            return Response({'error': 'Purchase verification is temporarily unavailable. Your purchase is not lost.'}, status=503)
+        return Response(UserProfileSerializer(profile, context={'request': request}).data)

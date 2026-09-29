@@ -11,16 +11,29 @@ from api.models import (
     SupportTicketReply, Report, Block, Transaction, OTPLog, SavedMatch,
     AdminActionLog, Notification
 )
+from api.chat_media import (
+    audio_url_expires_at,
+    fresh_audio_url,
+    fresh_image_url,
+    image_url_expires_at,
+)
 
 
 class ChahiraTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
-    Custom JWT login serializer that injects the user's role into the response.
-    Returns: { access, refresh, role }
+    Custom JWT login serializer that injects the user's role and serialized profile into the response.
+    Returns: { access, refresh, role, user, profile }
     """
     def validate(self, attrs):
         data = super().validate(attrs)
         data['role'] = self.user.role
+        profile = getattr(self.user, 'profile', None)
+        if profile:
+            data['profile'] = UserProfileSerializer(profile, context=self.context).data
+            data['user'] = data['profile'].get('user', UserSerializer(self.user, context=self.context).data)
+        else:
+            data['user'] = UserSerializer(self.user, context=self.context).data
+            data['profile'] = None
         return data
 
 
@@ -142,6 +155,15 @@ class UserPhotoSerializer(serializers.ModelSerializer):
     # Read-only: returns the full Cloudinary CDN URL
     image = serializers.SerializerMethodField()
 
+    def to_internal_value(self, data):
+        # Allow client to supply file in 'image', 'photo', or 'image_upload'
+        if hasattr(data, 'copy'):
+            data = data.copy()
+        file_obj = data.get('image') or data.get('photo')
+        if file_obj and not data.get('image_upload'):
+            data['image_upload'] = file_obj
+        return super().to_internal_value(data)
+
     def get_image(self, obj):
         if not obj.image:
             return None
@@ -180,6 +202,17 @@ class UserPhotoSerializer(serializers.ModelSerializer):
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        access = instance.subscription_access
+        expiry = access['subscription_expires']
+        data.update(access, subscription_expires=expiry.isoformat() if expiry else None)
+        request = self.context.get('request')
+        if request and request.user.is_authenticated and instance.user_id == request.user.id:
+            from api.subscriptions import access_snapshot
+            data['access'] = access_snapshot(instance)
+        return data
+
     user = UserSerializer(read_only=True)
     photos = UserPhotoSerializer(many=True, read_only=True)
     connection_status = serializers.SerializerMethodField()
@@ -192,7 +225,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'gender', 'looking_for', 'marital_status', 'education_level', 
             'spoken_languages',
             'city', 'country', 'latitude', 'longitude', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'must_verify_face', 'onboarding_part1_completed',
-            'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'has_advanced_filters', 'has_all_chat_rooms', 'neurotype_labels', 
+            'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'neurotype_labels',
             'is_neurodivergent', 'open_to_meet_neurodivergent', 'qualities', 
             'interests', 'recharge_methods', 'exhaust_triggers', 
             'emotional_needs', 'second_degree_humor', 'soothe_methods', 
@@ -201,7 +234,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'likes_push', 'messages_push', 'is_dark_mode', 
             'preferred_language', 'is_deactivated', 'photos', 'connection_status', 'name'
         )
-        read_only_fields = ('id', 'user', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'must_verify_face', 'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'has_advanced_filters', 'has_all_chat_rooms', 'photos', 'connection_status', 'name')
+        read_only_fields = ('id', 'user', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'must_verify_face', 'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'photos', 'connection_status', 'name')
 
     def get_name(self, obj):
         return obj.display_name
@@ -251,21 +284,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
         # Update and dynamically compute profile completeness percentage
         profile = super().update(instance, validated_data)
-        
-        # Simple profile completeness algorithm
-        fields_to_check = [
-            profile.age, profile.gender, profile.looking_for, profile.marital_status,
-            profile.city, profile.country, profile.neurotype_labels, profile.qualities,
-            profile.interests, profile.recharge_methods, profile.exhaust_triggers, 
-            profile.emotional_needs, profile.soothe_methods
-        ]
-        completed = sum(1 for field in fields_to_check if field)
-        profile.profile_completion_pct = int((completed / len(fields_to_check)) * 100)
-        
-        # Verify 3 required photos constraint
-        if profile.photos.count() >= 3:
-            profile.profile_completion_pct = min(100, profile.profile_completion_pct + 10)
-            
+        profile.profile_completion_pct = profile.calculate_completion_pct()
         profile.save()
         return profile
 
@@ -289,6 +308,8 @@ class UserProfileBasicSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
+        ret['subscription_tier'] = instance.subscription_access['subscription_tier']
+        ret['subscription_product_id'] = instance.subscription_access['subscription_product_id']
         ret['username'] = instance.display_name
         return ret
 
@@ -312,11 +333,15 @@ class DirectMessageSerializer(serializers.ModelSerializer):
     receiver_name = serializers.ReadOnlyField(source='receiver.display_name')
     sender_photo = serializers.SerializerMethodField()
     receiver_photo = serializers.SerializerMethodField()
+    image_url = serializers.SerializerMethodField()
+    image_url_expires_at = serializers.SerializerMethodField()
+    audio_url = serializers.SerializerMethodField()
+    audio_url_expires_at = serializers.SerializerMethodField()
     reply_to_info = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = DirectMessage
-        fields = ('id', 'sender', 'receiver', 'sender_name', 'receiver_name', 'sender_photo', 'receiver_photo', 'content', 'timestamp', 'read_at', 'image_url', 'audio_url', 'audio_duration', 'reply_to', 'reply_to_info', 'reaction')
+        fields = ('id', 'sender', 'receiver', 'sender_name', 'receiver_name', 'sender_photo', 'receiver_photo', 'content', 'timestamp', 'read_at', 'image_url', 'image_url_expires_at', 'audio_url', 'audio_url_expires_at', 'audio_duration', 'reply_to', 'reply_to_info', 'reaction')
         read_only_fields = ('id', 'sender', 'timestamp', 'read_at')
 
     def get_reply_to_info(self, obj):
@@ -324,12 +349,25 @@ class DirectMessageSerializer(serializers.ModelSerializer):
             return {
                 'id': str(obj.reply_to.id),
                 'content': obj.reply_to.content,
-                'image_url': obj.reply_to.image_url,
-                'audio_url': obj.reply_to.audio_url,
+                'image_url': fresh_image_url(obj.reply_to.image_url),
+                'image_url_expires_at': image_url_expires_at(obj.reply_to.image_url),
+                'audio_url': fresh_audio_url(obj.reply_to.audio_url),
                 'sender_id': str(obj.reply_to.sender_id),
                 'sender_name': obj.reply_to.sender.display_name,
             }
         return None
+
+    def get_audio_url(self, obj):
+        return fresh_audio_url(obj.audio_url)
+
+    def get_audio_url_expires_at(self, obj):
+        return audio_url_expires_at(obj.audio_url)
+
+    def get_image_url(self, obj):
+        return fresh_image_url(obj.image_url)
+
+    def get_image_url_expires_at(self, obj):
+        return image_url_expires_at(obj.image_url)
 
     def get_sender_photo(self, obj):
         photos = list(obj.sender.photos.all())
@@ -352,12 +390,16 @@ class DirectMessageSerializer(serializers.ModelSerializer):
         return None
 
 class ChatRoomSerializer(serializers.ModelSerializer):
+    member_count = serializers.SerializerMethodField()
     is_joined = serializers.SerializerMethodField()
     member_avatars = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatRoom
         fields = ('id', 'name', 'member_count', 'member_avatars', 'is_joined')
+
+    def get_member_count(self, obj):
+        return obj.members.count()
 
     def get_is_joined(self, obj):
         request = self.context.get('request')
@@ -437,6 +479,12 @@ class BlockSerializer(serializers.ModelSerializer):
         read_only_fields = ('id', 'blocker', 'created_at')
 
 class TransactionSerializer(serializers.ModelSerializer):
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if data.get('payment_method') == 'Visa **** 4242':
+            data['payment_method'] = 'Unknown'
+        return data
+
     class Meta:
         model = Transaction
         fields = ('id', 'user', 'plan_name', 'amount', 'status', 'stripe_charge_id', 'payment_method', 'created_at')
@@ -464,7 +512,17 @@ class AdminActionLogSerializer(serializers.ModelSerializer):
 
 
 class NotificationSerializer(serializers.ModelSerializer):
+    data = serializers.SerializerMethodField()
+
+    def get_data(self, obj):
+        data = dict(obj.data) if isinstance(obj.data, dict) else {}
+        profile_id = str(data.get('profile_id') or '')
+        sender_photos = self.context.get('sender_photos')
+        if profile_id and sender_photos is not None:
+            data['sender_photo'] = sender_photos.get(profile_id)
+        return data
+
     class Meta:
         model = Notification
-        fields = ('id', 'recipient', 'title', 'body', 'type', 'is_read', 'created_at')
+        fields = ('id', 'recipient', 'title', 'body', 'type', 'data', 'is_read', 'created_at')
         read_only_fields = ('id', 'recipient', 'created_at')

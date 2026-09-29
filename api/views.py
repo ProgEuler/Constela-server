@@ -1,10 +1,14 @@
 from collections import Counter, defaultdict
+from pathlib import Path
+from uuid import uuid4
 
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db import transaction
 from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.core.mail import send_mail
+from django.core.signing import BadSignature
 from django.conf import settings
 from rest_framework import viewsets, status, permissions
 from rest_framework.views import APIView
@@ -29,9 +33,18 @@ from api.serializers import (
     SupportTicketReplySerializer, ReportSerializer, BlockSerializer,
     TransactionSerializer, SavedMatchSerializer, AdminActionLogSerializer
 )
+from api.subscriptions import access_snapshot, accessible_rooms, consume_usage, payment_history, quota_snapshot
 from api.permissions import IsMember, IsSupportAgent, IsModerator, IsAdminUser, IsSuperAdmin
 from api.matching_engine import calculate_compatibility
 from api.push_notifications import send_push_notification_to_user
+from api.chat_media import (
+    audio_storage_key,
+    image_storage_key,
+    sign_audio_upload,
+    sign_image_upload,
+    verify_audio_upload,
+    verify_image_upload,
+)
 
 def get_cloudinary_url(image_field):
     """Return a guaranteed Cloudinary CDN URL for a stored ImageField."""
@@ -109,14 +122,18 @@ class OTPVerifyView(APIView):
             
             # Generate JWT Tokens
             refresh = RefreshToken.for_user(user)
+            profile_data = UserProfileSerializer(profile, context={'request': request}).data
             return Response({
                 "access": str(refresh.access_token),
                 "refresh": str(refresh),
-                "user": {
+                "role": user.role,
+                "user": profile_data.get('user', {
+                    "id": str(user.id),
                     "email": user.email,
                     "username": user.username,
                     "is_verified": user.is_verified,
-                }
+                }),
+                "profile": profile_data,
             }, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -158,14 +175,23 @@ class GoogleAuthView(APIView):
             # If Firebase fails (e.g. it's a raw Google OAuth token instead of a Firebase token),
             # verify it directly using Google's tokeninfo endpoint
             import requests
-            response = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}")
+            response = requests.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"id_token": id_token},
+                timeout=5,
+            )
             if response.status_code == 200:
                 decoded_token = response.json()
+                if decoded_token.get("aud") != settings.GOOGLE_OAUTH_WEB_CLIENT_ID:
+                    return Response(
+                        {"error": "Google token was issued for a different application."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 email = decoded_token.get("email")
                 full_name = decoded_token.get("name", "")
             else:
                 return Response(
-                    {"error": f"Invalid or expired Google token: {response.json().get('error_description', str(e))}"},
+                    {"error": "Invalid or expired Google token."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -226,23 +252,27 @@ class GoogleAuthView(APIView):
         # Generate JWT Tokens
         refresh = RefreshToken.for_user(user)
         profile = getattr(user, 'profile', None)
+        profile_data = UserProfileSerializer(profile, context={'request': request}).data if profile else None
 
         return Response({
             "access": str(refresh.access_token),
             "refresh": str(refresh),
             "is_new_user": is_new_user,
-            "user": {
+            "role": user.role,
+            "user": profile_data.get('user', {
+                "id": str(user.id),
+                "email": user.email,
+                "username": user.username,
+                "first_name": user.first_name,
+                "is_verified": user.is_verified,
+            }) if profile_data else {
                 "id": str(user.id),
                 "email": user.email,
                 "username": user.username,
                 "first_name": user.first_name,
                 "is_verified": user.is_verified,
             },
-            "profile": {
-                "profile_completion_pct": profile.profile_completion_pct if profile else 0,
-                "face_verification_status": profile.face_verification_status if profile else "not_submitted",
-                "onboarding_part1_completed": profile.onboarding_part1_completed if profile else False,
-            } if profile else None
+            "profile": profile_data,
         }, status=status.HTTP_200_OK)
 
 
@@ -391,6 +421,31 @@ class ResetPasswordView(APIView):
 
         return Response({"message": "Password has been reset successfully."}, status=status.HTTP_200_OK)
 
+
+class VerifyPasswordResetCodeView(APIView):
+    """Validates a password-reset code before the user chooses a new password."""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email', '').strip()
+        code = request.data.get('code', '').strip()
+
+        if not email or not code:
+            return Response({"error": "email and code are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            user = None
+
+        is_expired = user and user.otp_created_at and (timezone.now() - user.otp_created_at).total_seconds() > 600
+        if not user or not user.otp or user.otp != code or is_expired:
+            OTPLog.objects.create(email=email, otp=code, action='failed_verification')
+            message = "Verification code has expired. Please request a new one." if is_expired else "Invalid email or verification code."
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({"message": "Code verified."}, status=status.HTTP_200_OK)
+
 # 2. MEMBER PROFILE API
 class UserProfileViewSet(viewsets.ModelViewSet):
     serializer_class = UserProfileSerializer
@@ -426,7 +481,7 @@ class UserProfileViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(profile)
             return Response(serializer.data)
         
-        # Support multipart form-data preprocessing for lists
+        # Support both JSON and multipart form-data preprocessing
         import json
 
         data = {}
@@ -436,33 +491,70 @@ class UserProfileViewSet(viewsets.ModelViewSet):
             'recharge_methods', 'exhaust_triggers', 
             'emotional_needs', 'soothe_methods', 'spoken_languages'
         ]
+        int_fields = ['age', 'height_cm', 'weight_kg']
+        bool_fields = [
+            'has_children', 'wants_children', 'smoking', 'alcohol', 'pets',
+            'second_degree_humor', 'likes_push', 'messages_push', 'is_dark_mode',
+            'is_neurodivergent', 'open_to_meet_neurodivergent'
+        ]
         
         for key in request.data.keys():
             if key in list_fields:
                 val = request.data.get(key)
-                if isinstance(val, str):
+                if isinstance(val, list):
+                    data[key] = val
+                elif isinstance(val, str):
                     val_stripped = val.strip()
-                    if val_stripped.startswith('[') and val_stripped.endswith(']'):
+                    if not val_stripped or val_stripped == '[]':
+                        data[key] = []
+                    elif val_stripped.startswith('[') and val_stripped.endswith(']'):
                         try:
-                            data[key] = json.loads(val_stripped)
+                            parsed = json.loads(val_stripped)
+                            data[key] = parsed if isinstance(parsed, list) else [parsed]
                         except json.JSONDecodeError:
                             data[key] = [val_stripped]
                     elif ',' in val_stripped:
-                        data[key] = [x.strip() for x in val_stripped.split(',')]
+                        data[key] = [x.strip() for x in val_stripped.split(',') if x.strip()]
                     else:
                         data[key] = [val_stripped]
                 elif hasattr(request.data, 'getlist'):
                     list_val = request.data.getlist(key)
                     if list_val:
-                        if len(list_val) == 1 and list_val[0].startswith('[') and list_val[0].endswith(']'):
+                        if len(list_val) == 1 and isinstance(list_val[0], str) and list_val[0].startswith('[') and list_val[0].endswith(']'):
                             try:
-                                data[key] = json.loads(list_val[0])
+                                parsed = json.loads(list_val[0])
+                                data[key] = parsed if isinstance(parsed, list) else [parsed]
                             except json.JSONDecodeError:
                                 data[key] = list_val
-                        elif len(list_val) == 1 and ',' in list_val[0]:
-                            data[key] = [x.strip() for x in list_val[0].split(',')]
+                        elif len(list_val) == 1 and isinstance(list_val[0], str) and ',' in list_val[0]:
+                            data[key] = [x.strip() for x in list_val[0].split(',') if x.strip()]
                         else:
                             data[key] = list_val
+                    else:
+                        data[key] = []
+                else:
+                    data[key] = []
+            elif key in int_fields:
+                val = request.data.get(key)
+                if val == '' or val is None:
+                    data[key] = None
+                else:
+                    try:
+                        data[key] = int(val)
+                    except (ValueError, TypeError):
+                        data[key] = val
+            elif key in bool_fields:
+                val = request.data.get(key)
+                if isinstance(val, str):
+                    val_lower = val.strip().lower()
+                    if val_lower in ('true', '1', 'yes'):
+                        data[key] = True
+                    elif val_lower in ('false', '0', 'no'):
+                        data[key] = False
+                    else:
+                        data[key] = val
+                else:
+                    data[key] = val
             else:
                 val = request.data.get(key)
                 if isinstance(val, str):
@@ -536,10 +628,8 @@ class UserProfileViewSet(viewsets.ModelViewSet):
                 )
                 
             # Recalculate completeness after photo creation
-            photos_count = UserPhoto.objects.filter(profile=profile_obj).count()
-            if photos_count >= 3:
-                profile_obj.profile_completion_pct = min(100, profile_obj.profile_completion_pct + 10)
-                profile_obj.save()
+            profile_obj.profile_completion_pct = profile_obj.calculate_completion_pct()
+            profile_obj.save()
 
             # Refresh serializer data
             serializer = self.get_serializer(profile_obj)
@@ -564,13 +654,12 @@ class UserPhotoViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         profile = get_object_or_404(UserProfile, user=self.request.user)
-        photo = serializer.save(profile=profile)
+        has_main = UserPhoto.objects.filter(profile=profile, is_main=True).exists()
+        photo = serializer.save(profile=profile, is_main=not has_main)
 
         # Recalculate completeness
-        photos_count = UserPhoto.objects.filter(profile=profile).count()
-        if photos_count >= 3 and profile.profile_completion_pct < 100:
-            profile.profile_completion_pct = min(100, profile.profile_completion_pct + 10)
-            profile.save()
+        profile.profile_completion_pct = profile.calculate_completion_pct()
+        profile.save()
 
     def perform_update(self, serializer):
         """Delete the old Cloudinary image before saving the replacement."""
@@ -581,10 +670,28 @@ class UserPhotoViewSet(viewsets.ModelViewSet):
             self._delete_cloudinary_asset(old_image)
         serializer.save()
 
+    @action(detail=True, methods=['post'], url_path='set-main')
+    def set_main(self, request, pk=None):
+        photo = self.get_object()
+        UserPhoto.objects.filter(profile=photo.profile).update(is_main=False)
+        photo.is_main = True
+        photo.save()
+        return Response({'status': 'main photo updated'})
+
     def perform_destroy(self, instance):
         """Delete the Cloudinary asset when the photo record is removed."""
+        profile = instance.profile
+        was_main = instance.is_main
         self._delete_cloudinary_asset(instance.image)
         instance.delete()
+        if profile:
+            if was_main:
+                first_photo = profile.photos.first()
+                if first_photo:
+                    first_photo.is_main = True
+                    first_photo.save()
+            profile.profile_completion_pct = profile.calculate_completion_pct()
+            profile.save()
 
 import math
 
@@ -634,8 +741,8 @@ class PerfectMatchView(APIView):
         blocked_me = Block.objects.filter(blocked_user=me).values_list('blocker', flat=True)
         
         # Get list of friends (pending or accepted) to exclude from dating
-        friends_sent = Friendship.objects.filter(sender=me).values_list('receiver', flat=True)
-        friends_received = Friendship.objects.filter(receiver=me).values_list('sender', flat=True)
+        friends_sent = Friendship.objects.filter(sender=me, status__in=['accepted', 'pending']).values_list('receiver', flat=True)
+        friends_received = Friendship.objects.filter(receiver=me, status__in=['accepted', 'pending']).values_list('sender', flat=True)
         
         base_exclude = set(blocked_by_me).union(set(blocked_me)).union(set(friends_sent)).union(set(friends_received))
         base_exclude.add(me.id)
@@ -748,8 +855,8 @@ class PerfectMatchView(APIView):
                     mapped_looking_for.append(item)
             candidates = candidates.filter(looking_for__in=mapped_looking_for)
 
-        # 2. Apply Advanced Filters (Only if user has premium)
-        if me.subscription_tier != 'freemium':
+        # Advanced filters are available to every user.
+        if request.query_params:
             education_level = request.query_params.get('education_level')
             if education_level:
                 edu_list = [el.strip().lower() for el in education_level.split(',')]
@@ -820,7 +927,7 @@ class PerfectMatchView(APIView):
         filter_recharge_methods = []
         filter_exhaust_triggers = []
 
-        if me.subscription_tier != 'freemium':
+        if request.query_params:
             req_interests = request.query_params.get('interests')
             if req_interests:
                 filter_interests = [i.strip().lower() for i in req_interests.split(',')]
@@ -980,18 +1087,7 @@ class PerfectMatchView(APIView):
         next_page = f"{base_with_params}page={page + 1}" if page < total_pages else None
         prev_page = f"{base_with_params}page={page - 1}" if page > 1 else None
 
-        # Check if limit is already reached
-        limit_reached = False
-        daily_likes = Match.objects.filter(
-            user1=me, 
-            status__in=['liked', 'superliked', 'matched'], 
-            created_at__date=timezone.now().date()
-        ).count()
-        
-        if me.subscription_tier == 'freemium' and daily_likes >= 20:
-            limit_reached = True
-        elif me.subscription_tier == 'light' and daily_likes >= 50:
-            limit_reached = True
+        likes_quota = quota_snapshot(me, 'likes')
 
         return Response({
             "total_count": total_count,
@@ -1001,7 +1097,8 @@ class PerfectMatchView(APIView):
             "next": next_page,
             "previous": prev_page,
             "results": paginated_matches,
-            "limit_reached": limit_reached
+            "limit_reached": likes_quota['remaining'] == 0,
+            "quota": likes_quota,
         }, status=status.HTTP_200_OK)
 
 
@@ -1015,7 +1112,7 @@ class MatchAnalysisView(APIView):
     def get(self, request):
         me = get_object_or_404(UserProfile, user=request.user)
         
-        if not me.has_match_analysis:
+        if not me.subscription_access['has_match_analysis']:
             return Response(
                 {"error": "You need the Perfect Match Analysis add-on to access this feature."},
                 status=status.HTTP_403_FORBIDDEN
@@ -1088,17 +1185,20 @@ class MatchActionView(APIView):
     """
     POST to like/dislike a profile. Enforces subscription limits.
     """
+    @transaction.atomic
     def post(self, request, target_profile_id):
         me = get_object_or_404(UserProfile, user=request.user)
         target = get_object_or_404(UserProfile, id=target_profile_id)
+        locked = {p.id: p for p in UserProfile.objects.select_for_update().filter(id__in=[me.id, target.id]).order_by('id')}
+        me = locked[me.id]
         action_type = request.data.get('action') # 'liked', 'disliked', 'superliked', or 'undo'
         
         if action_type not in ['liked', 'disliked', 'superliked', 'undo']:
             return Response({"error": "Invalid action. Use 'liked', 'disliked', 'superliked', or 'undo'."}, status=status.HTTP_400_BAD_REQUEST)
             
         if action_type == 'undo':
-            if me.subscription_tier == 'freemium':
-                return Response({"error": "Undo is a premium feature. Upgrade to Premium to rewind your swipes."}, status=status.HTTP_403_FORBIDDEN)
+            if not access_snapshot(me).get('can_undo_swipes', False):
+                return Response({"error": "Undo is not available on your current plan. Upgrade to rewind your swipes."}, status=status.HTTP_403_FORBIDDEN)
                 
             match_obj = Match.objects.filter(user1=me, user2=target).first()
             if match_obj:
@@ -1111,52 +1211,77 @@ class MatchActionView(APIView):
                 match_obj.delete()
             return Response({"status": "undone", "is_mutual_match": False}, status=status.HTTP_200_OK)
             
-        # 1. Enforce Subscription Likes Limits (Only for likes/superlikes)
-        if action_type in ['liked', 'superliked']:
-            daily_likes = Match.objects.filter(
-                user1=me, 
-                status__in=['liked', 'superliked', 'matched'], 
-                created_at__date=timezone.now().date()
-            ).count()
-            
-            if me.subscription_tier == 'freemium' and daily_likes >= 20:
-                return Response({"error": "Daily like limit (20) reached. Upgrade to Premium for more."}, status=status.HTTP_403_FORBIDDEN)
-            if me.subscription_tier == 'light' and daily_likes >= 50:
-                return Response({"error": "Daily like limit (50) reached. Upgrade to Premium Plus for more."}, status=status.HTTP_403_FORBIDDEN)
-
         # 2. Check Block status
         if Block.objects.filter(Q(blocker=me, blocked_user=target) | Q(blocker=target, blocked_user=me)).exists():
             return Response({"error": "Unable to perform action. Communication is blocked."}, status=status.HTTP_400_BAD_REQUEST)
 
+        already_liked = Match.objects.filter(user1=me, user2=target, status__in=['liked', 'superliked', 'matched']).exists()
+        if action_type in ['liked', 'superliked'] and not already_liked and not consume_usage(me, 'likes'):
+            return Response({
+                "code": "DAILY_LIKE_LIMIT_REACHED",
+                "error": "Daily like limit reached. Upgrade for more likes.",
+                "quota": quota_snapshot(me, 'likes'),
+            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
         # 3. Create or update match status
         match_obj, created = Match.objects.get_or_create(user1=me, user2=target, defaults={'status': action_type})
+        was_already_matched = False
         if not created:
-            match_obj.status = action_type
-            match_obj.save()
+            if match_obj.status == 'matched':
+                was_already_matched = True
+            else:
+                match_obj.status = action_type
+                match_obj.save()
             
         # 4. Check if mutual match exists
         is_mutual = False
         if action_type in ['liked', 'superliked']:
             mutual = Match.objects.filter(user1=target, user2=me, status__in=['liked', 'superliked', 'matched']).first()
             if mutual:
-                # Update status of both to matched
-                match_obj.status = 'matched'
-                match_obj.save()
-                mutual.status = 'matched'
-                mutual.save()
-                is_mutual = True
-                
-                if getattr(target, 'likes_push', True):
-                    send_push_notification_to_user(
-                        user=target.user,
-                        title="It's a Match! 🎉",
-                        body=f"You and {me.display_name} have liked each other.",
-                        data={"type": "match", "profile_id": str(me.id)}
-                    )
+                if mutual.status == 'matched' and was_already_matched:
+                    # Already matched previously; do not send duplicate match notifications
+                    is_mutual = True
+                else:
+                    # Update status of both to matched
+                    match_obj.status = 'matched'
+                    match_obj.save()
+                    mutual.status = 'matched'
+                    mutual.save()
+                    is_mutual = True
+
+                    me_photo = get_main_photo(me)
+                    target_photo = get_main_photo(target)
+
+                    # 1. Notify the target user (the person who was swiped on)
+                    if getattr(target, 'likes_push', True):
+                        send_push_notification_to_user(
+                            user=target.user,
+                            title="It's a Match! 🎉",
+                            body=f"You and {me.display_name} have liked each other.",
+                            data={
+                                "type": "match",
+                                "profile_id": str(me.id),
+                                "sender_photo": get_cloudinary_url(me_photo.image) if me_photo else None
+                            }
+                        )
+
+                    # 2. ALSO notify the current user (the person who just completed the match)
+                    if getattr(me, 'likes_push', True):
+                        send_push_notification_to_user(
+                            user=me.user,
+                            title="It's a Match! 🎉",
+                            body=f"You and {target.display_name} have liked each other.",
+                            data={
+                                "type": "match",
+                                "profile_id": str(target.id),
+                                "sender_photo": get_cloudinary_url(target_photo.image) if target_photo else None
+                            }
+                        )
                 
         return Response({
             "status": match_obj.status,
-            "is_mutual_match": is_mutual
+            "is_mutual_match": is_mutual,
+            "quota": quota_snapshot(me, 'likes'),
         }, status=status.HTTP_200_OK)
 
 class LikesReceivedView(APIView):
@@ -1167,8 +1292,8 @@ class LikesReceivedView(APIView):
         me = get_object_or_404(UserProfile, user=request.user)
         
         # Enforce restriction
-        if me.subscription_tier == 'freemium':
-            return Response({"error": "Upgrade to Premium to see who liked you."}, status=status.HTTP_403_FORBIDDEN)
+        if not access_snapshot(me).get('can_see_likes', False):
+            return Response({"error": "Upgrade your plan to see who liked you."}, status=status.HTTP_403_FORBIDDEN)
             
         likes = Match.objects.filter(user2=me, status='liked').select_related('user1__user').prefetch_related('user1__photos')
         profiles = [like.user1 for like in likes]
@@ -1263,17 +1388,17 @@ class UnmatchUserView(APIView):
         me = get_object_or_404(UserProfile, user=request.request.user if hasattr(request, 'request') else request.user)
         target = get_object_or_404(UserProfile, id=target_profile_id)
         
-        deleted, _ = Match.objects.filter(
+        Match.objects.filter(
             Q(user1=me, user2=target) | Q(user1=target, user2=me)
         ).delete()
 
-        if deleted:
-            DirectMessage.objects.filter(
-                Q(sender=me, receiver=target) | Q(sender=target, receiver=me)
-            ).delete()
+        # Unconditionally wipe all direct messages between these two users
+        DirectMessage.objects.filter(
+            Q(sender=me, receiver=target) | Q(sender=target, receiver=me)
+        ).delete()
         
         return Response({
-            "message": "Unmatched successfully" if deleted else "No match existed.",
+            "message": "Unmatched successfully",
             "target_profile_id": str(target_profile_id)
         }, status=status.HTTP_200_OK)
 
@@ -1420,6 +1545,11 @@ class FriendshipViewSet(viewsets.ModelViewSet):
         ).values_list('sender', flat=True)
         exclude_ids = exclude_ids.union(set(existing_friends_sender)).union(set(existing_friends_receiver))
 
+        # Exclude active matches from friend suggestions
+        matches_user1 = Match.objects.filter(user1=me, status='matched').values_list('user2', flat=True)
+        matches_user2 = Match.objects.filter(user2=me, status='matched').values_list('user1', flat=True)
+        exclude_ids = exclude_ids.union(set(matches_user1)).union(set(matches_user2))
+
         # Exclude self
         exclude_ids.add(me.id)
 
@@ -1529,11 +1659,16 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             friendship.save()
             
         if getattr(target, 'messages_push', True):
+            me_photo = get_main_photo(me)
             send_push_notification_to_user(
                 user=target.user,
                 title="New Friend Request",
                 body=f"{me.username} sent you a friend request!",
-                data={"type": "friend_request_received", "profile_id": str(me.id)}
+                data={
+                    "type": "friend_request_received",
+                    "profile_id": str(me.id),
+                    "sender_photo": get_cloudinary_url(me_photo.image) if me_photo else None
+                }
             )
             
         return Response({"message": "Request sent."}, status=status.HTTP_201_CREATED)
@@ -1547,11 +1682,16 @@ class FriendshipViewSet(viewsets.ModelViewSet):
         friendship.save()
         
         if getattr(friendship.sender, 'messages_push', True):
+            receiver_photo = get_main_photo(friendship.receiver)
             send_push_notification_to_user(
                 user=friendship.sender.user,
                 title="Friend Request Accepted",
                 body=f"{friendship.receiver.display_name} accepted your friend request!",
-                data={"type": "friend_request_accepted", "profile_id": str(friendship.receiver.id)}
+                data={
+                    "type": "friend_request_accepted",
+                    "profile_id": str(friendship.receiver.id),
+                    "sender_photo": get_cloudinary_url(receiver_photo.image) if receiver_photo else None
+                }
             )
         
         return Response({"message": "Friend request accepted."})
@@ -1560,78 +1700,72 @@ class FriendshipViewSet(viewsets.ModelViewSet):
     def decline(self, request, pk=None):
         friendship = self.get_object()
         if friendship.receiver.user != request.user:
-            return Response({"error": "Unauthorized."}, status=status.HTTP_430_FORBIDDEN)
+            return Response({"error": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
         friendship.status = 'declined'
         friendship.save()
         return Response({"message": "Friend request declined."})
 
+    def perform_destroy(self, instance):
+        DirectMessage.objects.filter(
+            Q(sender=instance.sender, receiver=instance.receiver) |
+            Q(sender=instance.receiver, receiver=instance.sender)
+        ).delete()
+        instance.delete()
+
 class UnfriendUserView(APIView):
     """
-    DELETE /api/friends/<target_profile_id>/unfriend/
+    DELETE or POST /api/friends/<target_profile_id>/unfriend/
     Removes a friend completely.
     """
     def delete(self, request, target_profile_id):
         me = get_object_or_404(UserProfile, user=request.request.user if hasattr(request, 'request') else request.user)
         target = get_object_or_404(UserProfile, id=target_profile_id)
         
-        deleted, _ = Friendship.objects.filter(
+        Friendship.objects.filter(
             Q(sender=me, receiver=target) | Q(sender=target, receiver=me)
         ).delete()
 
-        if deleted:
-            DirectMessage.objects.filter(
-                Q(sender=me, receiver=target) | Q(sender=target, receiver=me)
-            ).delete()
+        # Unconditionally wipe all direct messages between these two users
+        DirectMessage.objects.filter(
+            Q(sender=me, receiver=target) | Q(sender=target, receiver=me)
+        ).delete()
         
         return Response({
-            "message": "Unfriended successfully" if deleted else "Not friends.",
+            "message": "Unfriended successfully",
             "target_profile_id": str(target_profile_id)
         }, status=status.HTTP_200_OK)
+
+    def post(self, request, target_profile_id):
+        return self.delete(request, target_profile_id)
 
 # 5. CHAT & MESSAGING API
 class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ChatRoomSerializer
 
     def get_queryset(self):
-        # Order by created_at to ensure consistent chat rooms are returned for restricted tiers
-        queryset = ChatRoom.objects.prefetch_related('members__photos').order_by('created_at')
-        
-        if hasattr(self.request, 'user') and self.request.user.is_authenticated:
-            try:
-                me = UserProfile.objects.get(user=self.request.user)
-                has_full_access = (me.subscription_tier == 'plus' or me.has_all_chat_rooms)
-                if not has_full_access:
-                    # Freemium and Premium Light only get access to the first 3 chat rooms
-                    allowed_ids = list(ChatRoom.objects.order_by('created_at').values_list('id', flat=True)[:3])
-                    queryset = queryset.filter(id__in=allowed_ids)
-            except UserProfile.DoesNotExist:
-                pass
-
+        me = get_object_or_404(UserProfile, user=self.request.user)
+        queryset = accessible_rooms(me).prefetch_related('members__photos')
         search_query = self.request.query_params.get('search')
         if search_query:
             queryset = queryset.filter(Q(name__icontains=search_query) | Q(description__icontains=search_query))
         return queryset
 
     def list(self, request, *args, **kwargs):
-        # Freemium restriction: no chat room access
         me = get_object_or_404(UserProfile, user=request.user)
-        if me.subscription_tier == 'freemium' and not me.has_all_chat_rooms:
-            return Response({"error": "Upgrade to Premium or purchase the All Chat Rooms add-on to access Community Chat Rooms."}, status=status.HTTP_403_FORBIDDEN)
+        if not access_snapshot(me).get('can_access_community', False):
+            return Response({"error": "Upgrade your plan to access Community Chat Rooms."}, status=status.HTTP_403_FORBIDDEN)
         return super().list(request, *args, **kwargs)
 
     @action(detail=True, methods=['get'])
     def messages(self, request, pk=None):
         room = self.get_object()
-        # Production grade: 
-        # 1. Fetch newest 50 messages by timestamp descending
-        # 2. Use select_related and prefetch_related to eliminate N+1 DB queries on the sender & their photos
-        messages_qs = room.messages.select_related('sender').prefetch_related('sender__photos').order_by('-timestamp')[:50]
+        before = request.query_params.get('before')
+        messages_qs = room.messages.select_related('sender').prefetch_related('sender__photos')
+        if before:
+            messages_qs = messages_qs.filter(timestamp__lt=before)
+        messages_qs = messages_qs.order_by('-timestamp')[:50]
         
-        # Reverse the list so the frontend gets them in chronological order (oldest -> newest in the payload)
-        messages_list = list(messages_qs)
-        messages_list.reverse()
-        
-        serializer = ChatRoomMessageSerializer(messages_list, many=True, context={'request': request})
+        serializer = ChatRoomMessageSerializer(messages_qs, many=True, context={'request': request})
         return Response(serializer.data)
 
 
@@ -1639,8 +1773,8 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['post'])
     def join(self, request, pk=None):
         me = get_object_or_404(UserProfile, user=request.user)
-        if me.subscription_tier == 'freemium' and not me.has_all_chat_rooms:
-            return Response({"error": "Upgrade to Premium or purchase the All Chat Rooms add-on to access Community Chat Rooms."}, status=status.HTTP_403_FORBIDDEN)
+        if not access_snapshot(me).get('can_access_community', False):
+            return Response({"error": "Upgrade your plan to access Community Chat Rooms."}, status=status.HTTP_403_FORBIDDEN)
         room = self.get_object()
         room.members.add(me)
         room.member_count = room.members.count()
@@ -1654,9 +1788,7 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['post'])
     def leave(self, request, pk=None):
         me = get_object_or_404(UserProfile, user=request.user)
-        if me.subscription_tier == 'freemium' and not me.has_all_chat_rooms:
-            return Response({"error": "Upgrade to Premium or purchase the All Chat Rooms add-on to access Community Chat Rooms."}, status=status.HTTP_403_FORBIDDEN)
-        room = self.get_object()
+        room = get_object_or_404(ChatRoom, id=pk)
         room.members.remove(me)
         room.member_count = room.members.count()
         room.save()
@@ -1669,10 +1801,10 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
 class ChatRoomMessageCreateView(APIView):
     def post(self, request, room_id):
         me = get_object_or_404(UserProfile, user=request.user)
-        if me.subscription_tier == 'freemium' and not me.has_all_chat_rooms:
+        if not access_snapshot(me).get('can_access_community', False):
             return Response({"error": "No chat room access."}, status=status.HTTP_403_FORBIDDEN)
             
-        room = get_object_or_404(ChatRoom, id=room_id)
+        room = get_object_or_404(accessible_rooms(me), id=room_id)
         
         # Enforce that user must have joined the room to send a message
         if not room.members.filter(id=me.id).exists():
@@ -1682,12 +1814,36 @@ class ChatRoomMessageCreateView(APIView):
             )
             
         content = request.data.get('content')
+        temp_id = request.data.get('temp_id')
         if not content:
             return Response({"error": "Content required."}, status=status.HTTP_400_BAD_REQUEST)
-            
-        message = ChatRoomMessage.objects.create(room=room, sender=me, content=content)
+
+        with transaction.atomic():
+            me = UserProfile.objects.select_for_update().get(id=me.id)
+            if not consume_usage(me, 'community_messages'):
+                return Response({
+                    "code": "DAILY_COMMUNITY_MESSAGE_LIMIT_REACHED",
+                    "error": "Daily community-message limit reached. Upgrade to keep messaging.",
+                    "quota": quota_snapshot(me, 'community_messages'),
+                    "temp_id": temp_id,
+                }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            message = ChatRoomMessage.objects.create(room=room, sender=me, content=content)
         serializer = ChatRoomMessageSerializer(message)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        payload = {
+            'type': 'room_message',
+            'message': serializer.data,
+            'temp_id': temp_id,
+            'quota': quota_snapshot(me, 'community_messages'),
+            'quota_owner_id': str(me.id),
+        }
+        transaction.on_commit(
+            lambda: async_to_sync(get_channel_layer().group_send)(f"room_{room.id}", payload)
+        )
+        return Response({
+            **serializer.data,
+            "temp_id": temp_id,
+            "quota": quota_snapshot(me, 'community_messages'),
+        }, status=status.HTTP_201_CREATED)
 
 class DirectMessageViewSet(viewsets.ModelViewSet):
     serializer_class = DirectMessageSerializer
@@ -1698,7 +1854,7 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
             Q(sender=me) | Q(receiver=me)
         ).select_related('sender__user', 'receiver__user').prefetch_related(
             'sender__photos', 'receiver__photos'
-        ).order_by('timestamp')
+        ).order_by('-timestamp')
 
     @action(detail=False, methods=['get'])
     def threads(self, request):
@@ -1747,7 +1903,7 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
             if partner.last_message_image:
                 last_message = f"📷 Photo: {partner.last_message_content}" if partner.last_message_content else "📷 Photo"
             elif partner.last_message_audio:
-                last_message = "🎤 Voice message"
+                last_message = "Voice message"
             else:
                 last_message = partner.last_message_content or empty_message
 
@@ -1776,58 +1932,92 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
         me = get_object_or_404(UserProfile, user=request.user)
         recipient = get_object_or_404(UserProfile, id=recipient_id)
         
-        # Mark incoming messages as read
-        DirectMessage.objects.filter(
-            sender=recipient,
-            receiver=me,
-            read_at__isnull=True
-        ).update(read_at=timezone.now())
+        # Background prefetching must not mark a conversation as read.
+        if request.query_params.get('prefetch') != '1':
+            DirectMessage.objects.filter(
+                sender=recipient,
+                receiver=me,
+                read_at__isnull=True
+            ).update(read_at=timezone.now())
         
         messages = DirectMessage.objects.filter(
             Q(sender=me, receiver=recipient) | Q(sender=recipient, receiver=me)
-        ).select_related('sender__user', 'receiver__user').prefetch_related(
+        )
+
+        before = request.query_params.get('before')
+        if before:
+            messages = messages.filter(timestamp__lt=before)
+
+        messages = messages.select_related('sender__user', 'receiver__user').prefetch_related(
             'sender__photos', 'receiver__photos'
-        ).order_by('timestamp')
+        ).order_by('-timestamp')[:50]
         
         serializer = self.get_serializer(messages, many=True)
         return Response(serializer.data)
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         me = get_object_or_404(UserProfile, user=request.user)
         recipient_id = request.data.get('receiver')
         recipient = get_object_or_404(UserProfile, id=recipient_id)
+        locked = {p.id: p for p in UserProfile.objects.select_for_update().filter(id__in=[me.id, recipient.id]).order_by('id')}
+        me = locked[me.id]
         content = request.data.get('content')
         image_url = request.data.get('image_url')
+        image_ref = request.data.get('image_ref')
         audio_url = request.data.get('audio_url')
+        audio_ref = request.data.get('audio_ref')
         audio_duration = request.data.get('audio_duration')
         reply_to_id = request.data.get('reply_to_id')
+        temp_id = request.data.get('temp_id')
+
+        if not content and not image_url and not audio_url:
+            return Response({"error": "Message content is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if audio_url:
+            try:
+                audio_url = verify_audio_upload(audio_ref, me.id) if audio_ref else (audio_storage_key(audio_url) or audio_url)
+            except BadSignature:
+                return Response({"error": "Voice-message upload reference is invalid or expired."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if image_url:
+            try:
+                image_url = verify_image_upload(image_ref, me.id) if image_ref else (image_storage_key(image_url) or image_url)
+            except BadSignature:
+                return Response({"error": "Chat-image upload reference is invalid or expired."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check Block status
         if Block.objects.filter(Q(blocker=me, blocked_user=recipient) | Q(blocker=recipient, blocked_user=me)).exists():
             return Response({"error": "Blocked."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Enforce Subscription Messaging limits
-        # Find if thread already exists
-        thread_exists = DirectMessage.objects.filter(
-            Q(sender=me, receiver=recipient) | Q(sender=recipient, receiver=me)
+        is_connected = Friendship.objects.filter(
+            Q(sender=me, receiver=recipient) | Q(sender=recipient, receiver=me),
+            status='accepted'
+        ).exists() or Match.objects.filter(
+            Q(user1=me, user2=recipient) | Q(user1=recipient, user2=me),
+            status='matched'
         ).exists()
-
-        if not thread_exists:
-            # We are creating a new thread. Check monthly limit.
-            current_month = timezone.now().month
-            new_threads_this_month = DirectMessage.objects.filter(
-                sender=me, 
-                timestamp__month=current_month
-            ).values('receiver').distinct().count()
-            
-            if me.subscription_tier == 'freemium' and new_threads_this_month >= 1:
-                return Response({"error": "Freemium tier allows only 1 new message thread initiation per month. Upgrade to send more."}, status=status.HTTP_403_FORBIDDEN)
-            if me.subscription_tier == 'light' and new_threads_this_month >= 3:
-                return Response({"error": "Premium Light allows only 3 new message thread initiations per month. Upgrade to Premium Plus for unlimited."}, status=status.HTTP_403_FORBIDDEN)
+        if not is_connected:
+            return Response(
+                {"error": "You can only message accepted friends or matches."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         reply_msg = None
         if reply_to_id:
-            reply_msg = DirectMessage.objects.filter(id=reply_to_id).first()
+            reply_msg = DirectMessage.objects.filter(
+                Q(id=reply_to_id),
+                Q(sender=me, receiver=recipient) | Q(sender=recipient, receiver=me),
+            ).first()
+            if not reply_msg:
+                return Response({"error": "Reply message is not in this conversation."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not consume_usage(me, 'personal_messages'):
+            return Response({
+                "code": "DAILY_PERSONAL_MESSAGE_LIMIT_REACHED",
+                "error": "Daily personal-message limit reached. Upgrade to keep messaging.",
+                "quota": quota_snapshot(me, 'personal_messages'),
+            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         message = DirectMessage.objects.create(
             sender=me, 
@@ -1846,11 +2036,15 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
             payload = {
                 'type': 'direct_message',
                 'message': serializer.data,
+                'temp_id': temp_id,
             }
-            async_to_sync(channel_layer.group_send)(f"inbox_{me.id}", payload)
-            async_to_sync(channel_layer.group_send)(f"inbox_{recipient.id}", payload)
+            transaction.on_commit(lambda: async_to_sync(channel_layer.group_send)(f"inbox_{me.id}", payload))
+            transaction.on_commit(lambda: async_to_sync(channel_layer.group_send)(f"inbox_{recipient.id}", payload))
 
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response({
+            **serializer.data,
+            "quota": quota_snapshot(me, 'personal_messages'),
+        }, status=status.HTTP_201_CREATED)
 
 # 6. SAFETY & SETTINGS API
 class BlockViewSet(viewsets.ViewSet):
@@ -2006,67 +2200,9 @@ class VerifyEmailChangeView(APIView):
 class TransactionHistoryView(APIView):
     def get(self, request):
         me = get_object_or_404(UserProfile, user=request.user)
-        tx = Transaction.objects.filter(user=me).order_by('-created_at')
+        tx = payment_history().filter(user=me).order_by('-created_at')
         serializer = TransactionSerializer(tx, many=True)
         return Response(serializer.data)
-
-
-class UpgradeSubscriptionView(APIView):
-    """
-    POST /api/subscription/upgrade/
-    Mocks upgrading/downgrading the user's subscription tier.
-    """
-    def post(self, request):
-        me = get_object_or_404(UserProfile, user=request.user)
-        tier = request.data.get('tier')
-        amount = request.data.get('amount')
-        stripe_charge_id = request.data.get('stripe_charge_id', f"mock_ch_{int(timezone.now().timestamp())}")
-
-        valid_tiers = ['light', 'plus', 'freemium', 'add_on_filters', 'add_on_chatrooms', 'add_on_perfect_match']
-        if tier not in valid_tiers:
-            return Response({"error": "Invalid subscription tier."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Set default pricing
-        tier_pricing = {
-            'freemium': 0.00,
-            'light': 9.99,
-            'plus': 19.99,
-            'add_on_filters': 2.99,
-            'add_on_chatrooms': 3.99,
-            'add_on_perfect_match': 14.99
-        }
-        charge_amount = amount if amount is not None else tier_pricing[tier]
-
-        # Update profile tier or add-on
-        if tier == 'add_on_filters':
-            me.has_advanced_filters = True
-        elif tier == 'add_on_chatrooms':
-            me.has_all_chat_rooms = True
-        elif tier == 'add_on_perfect_match':
-            me.has_match_analysis = True
-        else:
-            me.subscription_tier = tier
-            if tier != 'freemium':
-                me.subscription_expires = timezone.now() + timezone.timedelta(days=30)
-            else:
-                me.subscription_expires = None
-        me.save()
-
-        # Log transaction
-        tx = Transaction.objects.create(
-            user=me,
-            plan_name=f"Premium {tier.title()}" if tier != 'freemium' else "Freemium Downgrade",
-            amount=charge_amount,
-            status='successful',
-            stripe_charge_id=stripe_charge_id
-        )
-
-        return Response({
-            "message": f"Subscription tier updated to {tier}.",
-            "subscription_tier": me.subscription_tier,
-            "subscription_expires": me.subscription_expires,
-            "transaction": TransactionSerializer(tx).data
-        }, status=status.HTTP_200_OK)
 
 
 class CreateReportView(APIView):
@@ -2787,11 +2923,11 @@ class AdminDashboardStatsView(APIView):
 
     def get(self, request):
         total_users = UserProfile.objects.filter(is_deactivated=False).count()
-        premium_users = UserProfile.objects.filter(is_deactivated=False, subscription_tier__in=['light', 'plus']).count()
+        premium_users = sum(p.subscription_access['subscription_tier'] != 'freemium' for p in UserProfile.objects.filter(is_deactivated=False).iterator())
         pending_verifications = UserProfile.objects.filter(is_verified=False, face_selfie__isnull=False).exclude(face_selfie='').distinct().count()
         unresolved_reports = Report.objects.exclude(status='resolved').count()
         pending_tickets = SupportTicket.objects.exclude(status='resolved').count()
-        total_revenue = Transaction.objects.filter(status='successful').aggregate(Sum('amount'))['amount__sum'] or 0.00
+        total_revenue = payment_history().filter(status='successful').aggregate(Sum('amount'))['amount__sum'] or 0.00
 
         data = {
             "total_users": total_users,
@@ -2846,7 +2982,7 @@ class AdminDashboardActivityView(APIView):
             })
 
         # 4. Premium subscriptions
-        for tx in Transaction.objects.filter(status__in=['successful', 'paid'], amount__gt=0).select_related('user').order_by('-created_at')[:10]:
+        for tx in payment_history().filter(status__in=['successful', 'paid'], amount__gt=0).select_related('user').order_by('-created_at')[:10]:
             activities.append({
                 "id": f"tx_{tx.id}",
                 "type": "subscription_purchased",
@@ -2926,7 +3062,7 @@ class AdminUserGiftSubscriptionView(APIView):
         tier = request.data.get('tier')
         duration_months = request.data.get('duration_months')
 
-        if not tier:
+        if not isinstance(tier, str) or not tier:
             return Response({"error": "tier is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Standardize tier string
@@ -2945,53 +3081,26 @@ class AdminUserGiftSubscriptionView(APIView):
         if duration_months is not None:
             try:
                 duration_months = int(duration_months)
-                if duration_months <= 0:
+                if not 0 < duration_months <= 120:
                     raise ValueError()
-            except ValueError:
+            except (ValueError, TypeError, OverflowError):
                 return Response({"error": "duration_months must be a positive integer."}, status=status.HTTP_400_BAD_REQUEST)
         else:
             duration_months = 1 # Default to 1 month if not specified
 
-        # If gifting freemium, it's effectively a downgrade / cancellation of active subscription
-        if tier == 'freemium':
-            profile.subscription_tier = 'freemium'
-            profile.subscription_expires = None
-            profile.save()
-
-            tx = Transaction.objects.create(
-                user=profile,
-                plan_name="Gift: Freemium Downgrade",
-                amount=0.00,
-                status='successful',
-                stripe_charge_id=f"gift_admin_{int(timezone.now().timestamp())}"
-            )
-            return Response({
-                "message": f"Successfully set user {profile.username}'s subscription to Freemium.",
-                "subscription_tier": profile.subscription_tier,
-                "subscription_expires": profile.subscription_expires,
-                "transaction": TransactionSerializer(tx).data
-            }, status=status.HTTP_200_OK)
-
-        # Update profile tier and expiry
-        profile.subscription_tier = tier
-        profile.subscription_expires = timezone.now() + timezone.timedelta(days=30 * duration_months)
-        profile.save()
-
-        # Log transaction
+        from api.subscriptions import gift_subscription
+        profile = gift_subscription(profile.id, tier, duration_months)
         tx = Transaction.objects.create(
-            user=profile,
-            plan_name=f"Gift: Premium {tier.title()} ({duration_months} Months)",
-            amount=0.00,
-            status='successful',
-            stripe_charge_id=f"gift_admin_{int(timezone.now().timestamp())}"
+            user=profile, plan_name=f"Gift: {tier.title()} ({duration_months} Months)",
+            amount=0, status='successful', payment_method='Admin gift',
+            stripe_charge_id=f"gift_admin_{uuid4()}",
         )
-
         return Response({
-            "message": f"Successfully gifted Premium {tier.title()} subscription for {duration_months} months to {profile.username}.",
-            "subscription_tier": profile.subscription_tier,
-            "subscription_expires": profile.subscription_expires,
-            "transaction": TransactionSerializer(tx).data
-        }, status=status.HTTP_200_OK)
+            "message": "Gift updated. Store subscriptions are managed separately.",
+            "subscription_tier": profile.subscription_access['subscription_tier'],
+            "subscription_expires": profile.subscription_access['subscription_expires'],
+            "transaction": TransactionSerializer(tx).data,
+        })
 
 
 class AdminMatchesDashboardView(APIView):
@@ -3113,23 +3222,23 @@ class AdminSubscriptionsDashboardView(APIView):
         now_dt = timezone.now()
         
         # 1. Compute Analytics
-        active_subs_qs = UserProfile.objects.filter(
-            subscription_tier__in=['light', 'plus'],
-            subscription_expires__gt=now_dt
-        )
-        active_subscriptions = active_subs_qs.count()
-        premium_plan_count = active_subs_qs.filter(subscription_tier='plus').count()
-        basic_plan_count = active_subs_qs.filter(subscription_tier='light').count()
+        tiers = Counter(p.subscription_access['subscription_tier'] for p in UserProfile.objects.all().iterator())
+        premium_plan_count = tiers['plus']
+        basic_plan_count = tiers['light']
+        active_subscriptions = premium_plan_count + basic_plan_count
 
-        # Monthly Revenue (last 30 days)
+        # Monthly Revenue (last 30 days) & Total All-Time Revenue
         thirty_days_ago = now_dt - timezone.timedelta(days=30)
-        monthly_rev = Transaction.objects.filter(
+        monthly_rev = payment_history().filter(
             status='successful',
             created_at__gte=thirty_days_ago
         ).aggregate(Sum('amount'))['amount__sum'] or 0.00
+        all_time_rev = payment_history().filter(
+            status='successful'
+        ).aggregate(Sum('amount'))['amount__sum'] or 0.00
 
         # 2. Get and Filter Subscriptions list (from successful transactions)
-        tx_qs = Transaction.objects.filter(
+        tx_qs = payment_history().filter(
             status='successful'
         ).select_related('user', 'user__user').order_by('-created_at')
 
@@ -3140,24 +3249,15 @@ class AdminSubscriptionsDashboardView(APIView):
 
         # 3. Serialize list
         serialized_subs = []
+        seen_profiles = set()
         for tx in tx_qs:
-            # Parse plan duration to calculate end date
-            duration_days = 30
-            plan_lower = tx.plan_name.lower()
-            if "3 month" in plan_lower:
-                duration_days = 90
-            elif "6 month" in plan_lower:
-                duration_days = 180
-            elif "12 month" in plan_lower or "annual" in plan_lower or "year" in plan_lower:
-                duration_days = 365
-
-            end_date = tx.created_at + timezone.timedelta(days=duration_days)
-            
-            # Status: Active if current date is before end_date and the user is still premium
-            # If user has downgraded to freemium, status is Expired/Downgraded
-            is_currently_active = tx.user.subscription_tier != 'freemium' and tx.user.subscription_expires and tx.user.subscription_expires > now_dt
-            is_tx_active = end_date > now_dt
-            status_str = "Active" if (is_tx_active and is_currently_active) else "Expired"
+            access = tx.user.subscription_access
+            latest = tx.user_id not in seen_profiles
+            seen_profiles.add(tx.user_id)
+            currently_active = latest and access['subscription_tier'] != 'freemium'
+            end_date = access['subscription_expires'] if currently_active else None
+            status_str = "Active" if currently_active else "Historical"
+            end_label = end_date.strftime('%Y-%m-%d') if end_date else ("Lifetime" if currently_active else "Not recorded")
 
             serialized_subs.append({
                 "id": tx.id,
@@ -3168,7 +3268,7 @@ class AdminSubscriptionsDashboardView(APIView):
                 },
                 "plan_name": tx.plan_name,
                 "start_date": tx.created_at.strftime('%Y-%m-%d'),
-                "end_date": end_date.strftime('%Y-%m-%d'),
+                "end_date": end_label,
                 "amount": str(tx.amount),
                 "status": status_str
             })
@@ -3189,10 +3289,130 @@ class AdminSubscriptionsDashboardView(APIView):
                 "active_subscriptions": active_subscriptions,
                 "premium_plan_count": premium_plan_count,
                 "basic_plan_count": basic_plan_count,
-                "monthly_revenue": float(monthly_rev)
+                "monthly_revenue": float(monthly_rev),
+                "total_revenue": float(all_time_rev),
             },
             "subscriptions": serialized_subs
         }, status=status.HTTP_200_OK)
+
+
+class AdminSubscriptionTiersView(APIView):
+    """
+    GET /api/admin/subscriptions/tiers/
+    PUT /api/admin/subscriptions/tiers/
+    Restricted to Admin and Super Admin.
+    Lists and updates tier limits and capabilities.
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from api.models import SubscriptionTierConfig
+        from api.subscriptions import DEFAULT_TIER_CONFIGS
+
+        configs = list(SubscriptionTierConfig.objects.all())
+        if not configs:
+            for tier, defaults in DEFAULT_TIER_CONFIGS.items():
+                SubscriptionTierConfig.objects.get_or_create(tier=tier, defaults=defaults)
+            configs = list(SubscriptionTierConfig.objects.all())
+
+        order_map = {'freemium': 0, 'light': 1, 'plus': 2}
+        configs.sort(key=lambda c: order_map.get(c.tier, 99))
+
+        data = []
+        for c in configs:
+            data.append({
+                "tier": c.tier,
+                "name": c.name,
+                "daily_likes_limit": c.daily_likes_limit,
+                "daily_personal_messages_limit": c.daily_personal_messages_limit,
+                "daily_community_messages_limit": c.daily_community_messages_limit,
+                "community_room_limit": c.community_room_limit,
+                "can_see_likes": c.can_see_likes,
+                "can_undo_swipes": c.can_undo_swipes,
+                "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+            })
+        return Response({"tiers": data}, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        from api.models import SubscriptionTierConfig
+        from django.db import transaction
+        tiers_payload = request.data.get('tiers')
+        if not isinstance(tiers_payload, list):
+            return Response({"error": "Payload must contain a 'tiers' list."}, status=status.HTTP_400_BAD_REQUEST)
+
+        valid_tiers = {'freemium', 'light', 'plus'}
+        updated = []
+        with transaction.atomic():
+            for item in tiers_payload:
+                if not isinstance(item, dict):
+                    transaction.set_rollback(True)
+                    return Response({"error": "Each item in 'tiers' must be an object."}, status=status.HTTP_400_BAD_REQUEST)
+
+                tier_code = item.get('tier')
+                if not tier_code or tier_code not in valid_tiers:
+                    transaction.set_rollback(True)
+                    return Response({"error": f"Invalid tier '{tier_code}'. Must be one of: freemium, light, plus."}, status=status.HTTP_400_BAD_REQUEST)
+
+                config_obj, _ = SubscriptionTierConfig.objects.select_for_update().get_or_create(
+                    tier=tier_code,
+                    defaults={'name': tier_code.capitalize()}
+                )
+                if 'name' in item and isinstance(item['name'], str) and item['name'].strip():
+                    config_obj.name = item['name'].strip()
+
+                for num_field in (
+                    'daily_likes_limit', 'daily_personal_messages_limit',
+                    'daily_community_messages_limit', 'community_room_limit',
+                ):
+                    if num_field in item:
+                        raw = item[num_field]
+                        if raw is None or raw == '':
+                            setattr(config_obj, num_field, None)
+                        else:
+                            try:
+                                val = int(raw)
+                                if val < 0:
+                                    transaction.set_rollback(True)
+                                    return Response({"error": f"{num_field} cannot be negative."}, status=status.HTTP_400_BAD_REQUEST)
+                                setattr(config_obj, num_field, val)
+                            except (ValueError, TypeError):
+                                transaction.set_rollback(True)
+                                return Response({"error": f"Invalid integer value for {num_field}."}, status=status.HTTP_400_BAD_REQUEST)
+
+                # Boolean capabilities: can_see_likes, can_undo_swipes
+                for bool_field in ('can_see_likes', 'can_undo_swipes'):
+                    if bool_field in item:
+                        raw = item[bool_field]
+                        if isinstance(raw, bool):
+                            setattr(config_obj, bool_field, raw)
+                        elif isinstance(raw, str):
+                            setattr(config_obj, bool_field, raw.strip().lower() in ('true', '1', 'yes'))
+                        else:
+                            setattr(config_obj, bool_field, bool(raw))
+
+                config_obj.save()
+                updated.append(config_obj.tier)
+
+        from django.core.cache import cache
+        cache.delete('tier_config_all')
+        for t in updated:
+            cache.delete(f'tier_config_{t}')
+
+        # Broadcast live event to open mobile apps via WebSocket
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    "global_system",
+                    {
+                        "type": "subscription_policy_updated",
+                        "timestamp": timezone.now().isoformat(),
+                    }
+                )
+        except Exception:
+            pass
+
+        return Response({"message": "Tier configurations updated successfully.", "updated": updated}, status=status.HTTP_200_OK)
 
 
 class AdminPaymentsDashboardView(APIView):
@@ -3209,19 +3429,19 @@ class AdminPaymentsDashboardView(APIView):
         
         # 1. Compute Analytics
         # Total revenue this month (paid or successful transactions in last 30 days)
-        total_revenue = Transaction.objects.filter(
+        total_revenue = payment_history().filter(
             status__in=['paid', 'successful'],
             created_at__gte=thirty_days_ago
         ).aggregate(Sum('amount'))['amount__sum'] or 0.00
         
         # Pending disputes
-        pending_disputes = Transaction.objects.filter(status='disputed').count()
+        pending_disputes = payment_history().filter(status='disputed').count()
 
         # Refunds issued
-        refunds_issued = Transaction.objects.filter(status='refunded').count()
+        refunds_issued = payment_history().filter(status='refunded').count()
 
         # 2. Get and Filter payments list
-        tx_qs = Transaction.objects.all().select_related('user', 'user__user').order_by('-created_at')
+        tx_qs = payment_history().select_related('user', 'user__user').order_by('-created_at')
 
         # Filter by search
         search_query = request.query_params.get('search', '').strip()
@@ -3238,12 +3458,12 @@ class AdminPaymentsDashboardView(APIView):
                     "username": tx.user.username,
                     "email": tx.user.user.email
                 },
-                "transaction_id": tx.stripe_charge_id or f"TXN-{10000 + tx.id}",
+                "transaction_id": tx.stripe_charge_id or f"TXN-{tx.id}",
                 "amount": str(tx.amount),
                 "plan_name": tx.plan_name,
                 "date": tx.created_at.strftime('%Y-%m-%d'),
                 "status": tx.get_status_display(),
-                "payment_method": tx.payment_method
+                "payment_method": 'Unknown' if tx.payment_method == 'Visa **** 4242' else tx.payment_method
             })
 
         # 4. Apply ordering
@@ -3521,13 +3741,21 @@ class ChatImageUploadView(APIView):
         file = request.FILES.get('image')
         if not file:
             return Response({"error": "No image provided"}, status=status.HTTP_400_BAD_REQUEST)
-        
+        if not (file.content_type or '').startswith('image/') or file.size > 15 * 1024 * 1024:
+            return Response({"error": "Image must be under 15 MB"}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile = get_object_or_404(UserProfile, user=request.user)
         try:
-            file_name = default_storage.save(f"chat_images/{file.name}", file)
-            file_url = default_storage.url(file_name)
-            return Response({"image_url": file_url}, status=status.HTTP_201_CREATED)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            extension = Path(file.name).suffix.lower()
+            if extension not in {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif'}:
+                extension = '.jpg'
+            file_name = default_storage.save(f"chat_images/{uuid4().hex}{extension}", file)
+            return Response({
+                "image_url": default_storage.url(file_name),
+                "image_ref": sign_image_upload(file_name, profile.id),
+            }, status=status.HTTP_201_CREATED)
+        except Exception:
+            return Response({"error": "Couldn't upload image. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class ChatAudioUploadView(APIView):
@@ -3543,9 +3771,16 @@ class ChatAudioUploadView(APIView):
         if not (file.content_type or '').startswith('audio/') or file.size > 10 * 1024 * 1024:
             return Response({"error": "Audio must be under 10 MB"}, status=status.HTTP_400_BAD_REQUEST)
 
+        profile = get_object_or_404(UserProfile, user=request.user)
         try:
-            file_name = default_storage.save(f"chat_audio/{file.name}", file)
-            return Response({"audio_url": default_storage.url(file_name)}, status=status.HTTP_201_CREATED)
+            extension = Path(file.name).suffix.lower()
+            if extension not in {'.m4a', '.aac', '.mp3', '.wav', '.ogg', '.webm', '.3gp', '.mp4'}:
+                extension = '.m4a'
+            file_name = default_storage.save(f"chat_audio/{uuid4().hex}{extension}", file)
+            return Response({
+                "audio_url": default_storage.url(file_name),
+                "audio_ref": sign_audio_upload(file_name, profile.id),
+            }, status=status.HTTP_201_CREATED)
         except Exception:
             return Response({"error": "Couldn't upload audio. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -3642,8 +3877,23 @@ class NotificationListView(APIView):
         qs = Notification.objects.filter(recipient=request.user).order_by('-created_at')
         total = qs.count()
         
-        notifications = qs[offset:offset+limit]
-        serializer = NotificationSerializer(notifications, many=True)
+        notifications = list(qs[offset:offset+limit])
+        profile_ids = {
+            str(notification.data.get('profile_id'))
+            for notification in notifications
+            if isinstance(notification.data, dict) and notification.data.get('profile_id')
+        }
+        sender_photos = {}
+        profiles = UserProfile.objects.filter(id__in=profile_ids).prefetch_related('photos')
+        for profile in profiles:
+            photo = get_main_photo(profile)
+            sender_photos[str(profile.id)] = get_cloudinary_url(photo.image) if photo else None
+
+        serializer = NotificationSerializer(
+            notifications,
+            many=True,
+            context={'sender_photos': sender_photos},
+        )
         
         return Response({
             'results': serializer.data,

@@ -70,12 +70,19 @@ class UserProfile(models.Model):
     subscription_tier = models.CharField(max_length=20, choices=TIER_CHOICES, default='freemium')
     subscription_expires = models.DateTimeField(null=True, blank=True)
     has_match_analysis = models.BooleanField(default=False)
-    has_advanced_filters = models.BooleanField(default=False)
-    has_all_chat_rooms = models.BooleanField(default=False)
     
     # Detailed Subscription Info
     subscription_product_id = models.CharField(max_length=100, null=True, blank=True)
     subscription_store = models.CharField(max_length=50, null=True, blank=True)
+    revenuecat_entitlements = models.JSONField(null=True, blank=True, editable=False)
+    subscription_synced_at = models.DateTimeField(null=True, blank=True, editable=False)
+    subscription_gift = models.JSONField(default=dict, blank=True, editable=False)
+
+    @property
+    def subscription_access(self):
+        from api.subscriptions import effective_access
+        return effective_access(self)
+
     # Neurotype Identity
     neurotype_labels = models.JSONField(default=list, blank=True)  # Autistic, ADHD, etc.
     is_neurodivergent = models.BooleanField(default=False)
@@ -145,6 +152,58 @@ class UserProfile(models.Model):
     @property
     def name(self):
         return self.display_name
+
+    def calculate_completion_pct(self):
+        score = 0
+        # 1. Identity & Location (up to 30 pts)
+        if self.user and self.user.first_name:
+            score += 5
+        if self.age:
+            score += 5
+        if self.gender:
+            score += 5
+        if self.city and self.country:
+            score += 5
+        if self.marital_status:
+            score += 5
+        if self.looking_for:
+            score += 5
+
+        # 2. Photos (up to 25 pts)
+        photo_count = self.photos.count() if self.pk else 0
+        if photo_count >= 3:
+            score += 25
+        elif photo_count >= 2:
+            score += 20
+        elif photo_count >= 1:
+            score += 15
+
+        # 3. Personality, Languages & Neurotype (up to 25 pts)
+        if self.interests and len(self.interests) > 0:
+            score += 10
+        if self.qualities and len(self.qualities) > 0:
+            score += 10
+        if (self.spoken_languages and len(self.spoken_languages) > 0) or (self.neurotype_labels and len(self.neurotype_labels) > 0):
+            score += 5
+
+        # 4. Lifestyle & Emotional (up to 20 pts)
+        has_lifestyle = bool(
+            self.sport or self.eating_habits or self.smoking or 
+            self.alcohol or self.pets or self.has_children or self.wants_children
+        )
+        if has_lifestyle:
+            score += 10
+
+        has_emotional = bool(
+            (self.recharge_methods and len(self.recharge_methods) > 0) or
+            (self.exhaust_triggers and len(self.exhaust_triggers) > 0) or
+            (self.emotional_needs and len(self.emotional_needs) > 0) or
+            (self.soothe_methods and len(self.soothe_methods) > 0)
+        )
+        if has_emotional:
+            score += 10
+
+        return min(100, score)
         
     def clean(self):
         super().clean()
@@ -157,6 +216,9 @@ class UserPhoto(models.Model):
     is_main = models.BooleanField(default=False)
     is_verified = models.BooleanField(default=False)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-is_main', '-uploaded_at']
 
     def __str__(self):
         return f"Photo {self.id} for {self.profile.username}"
@@ -213,8 +275,9 @@ class DirectMessage(models.Model):
     content = models.TextField(blank=True, null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     read_at = models.DateTimeField(null=True, blank=True)
-    image_url = models.URLField(max_length=500, blank=True, null=True)
-    audio_url = models.URLField(max_length=500, blank=True, null=True)
+    # Media columns store R2 object keys for new messages; legacy rows may contain full URLs.
+    image_url = models.CharField(max_length=500, blank=True, null=True)
+    audio_url = models.CharField(max_length=500, blank=True, null=True)
     audio_duration = models.PositiveIntegerField(blank=True, null=True)
     reply_to = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='replies')
     reaction = models.CharField(max_length=20, blank=True, null=True)
@@ -351,7 +414,8 @@ class Transaction(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES)
     stripe_charge_id = models.CharField(max_length=255, blank=True, null=True)
-    payment_method = models.CharField(max_length=100, default='Visa **** 4242')
+    payment_method = models.CharField(max_length=100, default='Unknown')
+    revenuecat_charge_key = models.CharField(max_length=512, null=True, blank=True, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -362,6 +426,22 @@ class Transaction(models.Model):
 
     def __str__(self):
         return f"TX #{self.id}: {self.plan_name} ({self.status}) for {self.user.username}"
+
+
+class RevenueCatEvent(models.Model):
+    id = models.CharField(max_length=255, primary_key=True)
+    event_type = models.CharField(max_length=100)
+    processed_at = models.DateTimeField(auto_now_add=True)
+
+
+class SubscriptionUsage(models.Model):
+    profile = models.ForeignKey(UserProfile, on_delete=models.CASCADE)
+    kind = models.CharField(max_length=32)
+    period = models.DateField()
+    count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['profile', 'kind', 'period'], name='subscription_usage_period')]
 
 
 class OTPLog(models.Model):
@@ -414,7 +494,8 @@ class Notification(models.Model):
     recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
     title = models.CharField(max_length=255)
     body = models.TextField()
-    type = models.CharField(max_length=50) # e.g. "match", "message", "super_like", "system"
+    type = models.CharField(max_length=50)
+    data = models.JSONField(default=dict, blank=True)
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -427,3 +508,65 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"To {self.recipient.email}: {self.title}"
+
+
+class SubscriptionTierConfig(models.Model):
+    TIER_CHOICES = (
+        ('freemium', 'Freemium'),
+        ('light', 'Premium Light'),
+        ('plus', 'Premium Plus'),
+    )
+
+    tier = models.CharField(max_length=20, choices=TIER_CHOICES, unique=True)
+    name = models.CharField(max_length=50)
+    daily_likes_limit = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Max likes per day. Leave blank for unlimited."
+    )
+    daily_personal_messages_limit = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Max personal messages sent per day. Leave blank for unlimited."
+    )
+    daily_community_messages_limit = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Max community-room messages sent per day. Leave blank for unlimited."
+    )
+    community_room_limit = models.PositiveIntegerField(
+        null=True, blank=True, default=0,
+        help_text="Number of community chat rooms accessible. 0 for none, leave blank for all rooms."
+    )
+    can_see_likes = models.BooleanField(
+        default=False,
+        help_text="Whether users in this tier can view who liked their profile."
+    )
+    can_undo_swipes = models.BooleanField(
+        default=False,
+        help_text="Whether users in this tier can rewind/undo their swipe actions."
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Subscription Tier Configuration"
+        verbose_name_plural = "Subscription Tier Configurations"
+        ordering = ['tier']
+
+    def __str__(self):
+        return f"{self.name} ({self.tier})"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        try:
+            from django.core.cache import cache
+            cache.delete('tier_config_all')
+            cache.delete(f'tier_config_{self.tier}')
+        except Exception:
+            pass
+
+    def delete(self, *args, **kwargs):
+        try:
+            from django.core.cache import cache
+            cache.delete('tier_config_all')
+            cache.delete(f'tier_config_{self.tier}')
+        except Exception:
+            pass
+        super().delete(*args, **kwargs)

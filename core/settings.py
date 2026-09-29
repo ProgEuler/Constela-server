@@ -33,6 +33,10 @@ if env_file.exists():
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-lm*+#8)pugdgjpa@7c@_t1cpfgi!e=z93*^6r28k()fu(7my)s')
+GOOGLE_OAUTH_WEB_CLIENT_ID = os.environ.get(
+    'GOOGLE_OAUTH_WEB_CLIENT_ID',
+    '504633031372-14dbhe821adkj85sarl3g1otq3gu10um.apps.googleusercontent.com',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'False') == 'True'
@@ -40,25 +44,56 @@ DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',') if os.environ.get('ALLOWED_HOSTS') else ['*']
 
 CSRF_TRUSTED_ORIGINS = [
+    'https://dev.projectsyard.top',
     'https://dev.projectyard.top',
     'http://dev.projectyard.top',
     'https://dev2.projectyard.top',
     'http://dev2.projectyard.top',
     'http://127.0.0.1:8000',
     'http://localhost:8000',
+    'http://127.0.0.1:3000',
+    'http://localhost:3000',
+    'http://127.0.0.1:3001',
+    'http://localhost:3001',
+    'http://127.0.0.1:8081',
+    'http://localhost:8081',
     'https://mysimon-temperatures-baking-epa.trycloudflare.com',
     'https://*.trycloudflare.com',
 ]
 
+_FRONTEND_URL = os.environ.get('FRONTEND_URL')
+if _FRONTEND_URL:
+    _url = _FRONTEND_URL.rstrip('/')
+    if _url not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(_url)
+
+
 CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ORIGINS', '').split(',') if os.environ.get('CORS_ORIGINS') else [
+    'https://dev.projectsyard.top',
     'https://dev.projectyard.top',
     'http://dev.projectyard.top',
     'https://dev2.projectyard.top',
     'http://dev2.projectyard.top',
     'http://127.0.0.1:8000',
     'http://localhost:8000',
+    'http://127.0.0.1:3000',
+    'http://localhost:3000',
+    'http://127.0.0.1:3001',
+    'http://localhost:3001',
+    'http://127.0.0.1:8081',
+    'http://localhost:8081',
     'https://mysimon-temperatures-baking-epa.trycloudflare.com',
     'https://*.trycloudflare.com',
+]
+
+if _FRONTEND_URL:
+    _url = _FRONTEND_URL.rstrip('/')
+    if _url not in CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS.append(_url)
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost:\d+$",
+    r"^http://127\.0\.0\.1:\d+$",
 ]
 CORS_ALLOW_CREDENTIALS = True
 
@@ -72,6 +107,12 @@ if REDIS_URL:
             'CONFIG': {
                 'hosts': [REDIS_URL],
             },
+        }
+    }
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_URL,
         }
     }
 else:
@@ -154,12 +195,18 @@ db_url = os.environ.get('DATABASE_URL')
 if not db_url:
     print("CRITICAL ERROR: DATABASE_URL environment variable is missing!", file=sys.stderr)
 
+db_config = dj_database_url.config(
+    default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+    conn_max_age=0,
+    conn_health_checks=True,
+)
+
+if db_config.get('ENGINE') == 'django.db.backends.postgresql':
+    db_config['OPTIONS'] = db_config.get('OPTIONS', {})
+    # db_config['OPTIONS']['pool'] = True
+
 DATABASES = {
-    'default': dj_database_url.config(
-        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
-        conn_max_age=600,
-        conn_health_checks=True,
-    )
+    'default': db_config
 }
 
 
@@ -247,6 +294,7 @@ AWS_S3_SIGNATURE_VERSION = 's3v4'
 AWS_S3_REGION_NAME = 'auto' # Cloudflare R2 uses 'auto' region
 AWS_DEFAULT_ACL = None # R2 doesn't support ACLs
 AWS_QUERYSTRING_AUTH = True # Generate presigned URLs for private buckets
+AWS_QUERYSTRING_EXPIRE = 3600
 AWS_S3_FILE_OVERWRITE = False
 
 # Django 4.2+ / 6.0 requires STORAGES dict
@@ -272,4 +320,7 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'webmaster@localhost')
 
 # RevenueCat Integration
 REVENUECAT_WEBHOOK_SECRET = os.environ.get('REVENUECAT_WEBHOOK_SECRET')
-
+REVENUECAT_API_KEY = os.environ.get('REVENUECAT_API_KEY', '')
+REVENUECAT_SIGNING_SECRET = os.environ.get('REVENUECAT_SIGNING_SECRET', '')
+REVENUECAT_ALLOW_SANDBOX = os.environ.get('REVENUECAT_ALLOW_SANDBOX', 'false').lower() == 'true'
+REVENUECAT_APP_IDS = [value.strip() for value in os.environ.get('REVENUECAT_APP_IDS', '').split(',') if value.strip()]

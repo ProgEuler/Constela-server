@@ -20,7 +20,7 @@ We utilize several external services to power core features of the app:
 
 ### 3. RevenueCat
 * **What it does:** Manages premium subscriptions and in-app purchases.
-* **How it works:** The backend exposes a secure webhook endpoint (`/api/webhooks/revenuecat/`) that RevenueCat calls whenever a user subscribes, cancels, or renews. The endpoint uses the `REVENUECAT_WEBHOOK_SECRET` to verify the request is authentically from RevenueCat before upgrading the user's account in our database.
+* **How it works:** RevenueCat calls `/api/subscription/webhook/`. Authenticated deliveries trigger server-to-server subscriber verification; the app also calls `/api/subscription/sync/` after purchase/restore. Access expires independently of webhook delivery. See [deployment requirements and tests](SUBSCRIPTION_DEPLOYMENT.md) before deploying.
 
 ### 4. WebSockets (Django Channels)
 * **What it does:** Powers real-time direct messaging between matches.

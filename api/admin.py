@@ -4,7 +4,8 @@ from django.utils.html import format_html
 from api.models import (
     User, UserProfile, UserPhoto, Match, Friendship,
     DirectMessage, ChatRoom, ChatRoomMessage, SupportTicket,
-    SupportTicketReply, Report, Block, Transaction, OTPLog, SavedMatch
+    SupportTicketReply, Report, Block, Transaction, OTPLog, SavedMatch,
+    SubscriptionTierConfig
 )
 
 
@@ -62,7 +63,8 @@ class UserProfileAdmin(admin.ModelAdmin):
     inlines = [UserPhotoInline]
     list_display = ('username', 'user_email', 'gender', 'age', 'city', 'country',
                     'subscription_tier', 'subscription_product_id', 'is_verified', 'profile_completion_pct')
-    readonly_fields = ('face_selfie_preview', 'face_selfie_left_preview', 'face_selfie_right_preview')
+    readonly_fields = ('face_selfie_preview', 'face_selfie_left_preview', 'face_selfie_right_preview',
+                       'subscription_product_id', 'subscription_store')
 
     def get_cloudinary_preview(self, img_field):
         if img_field:
@@ -305,6 +307,38 @@ class SavedMatchAdmin(admin.ModelAdmin):
 
 
 # ──────────────────────────────────────────────────────────────
+# SUBSCRIPTION TIER CONFIGURATION
+# ──────────────────────────────────────────────────────────────
+class SubscriptionTierConfigAdmin(admin.ModelAdmin):
+    list_display = (
+        'name', 'tier', 'daily_likes_limit', 'daily_personal_messages_limit',
+        'daily_community_messages_limit',
+        'community_room_limit', 'can_see_likes', 'can_undo_swipes', 'updated_at'
+    )
+    list_editable = (
+        'daily_likes_limit', 'daily_personal_messages_limit',
+        'daily_community_messages_limit',
+        'community_room_limit', 'can_see_likes', 'can_undo_swipes'
+    )
+    readonly_fields = ('updated_at',)
+    fieldsets = (
+        ('Tier Identity', {
+            'fields': ('tier', 'name')
+        }),
+        ('Quotas & Limits', {
+            'fields': ('daily_likes_limit', 'daily_personal_messages_limit', 'daily_community_messages_limit', 'community_room_limit'),
+            'description': 'Leave limits empty (null) for unlimited access. Set community_room_limit to 0 for none, or leave empty for all rooms.'
+        }),
+        ('Feature Permissions', {
+            'fields': ('can_see_likes', 'can_undo_swipes')
+        }),
+        ('Audit', {
+            'fields': ('updated_at',)
+        }),
+    )
+
+
+# ──────────────────────────────────────────────────────────────
 # REGISTRATIONS
 # ──────────────────────────────────────────────────────────────
 admin.site.register(User, CustomUserAdmin)
@@ -322,6 +356,7 @@ admin.site.register(Block, BlockAdmin)
 admin.site.register(Transaction, TransactionAdmin)
 admin.site.register(OTPLog, OTPLogAdmin)
 admin.site.register(SavedMatch, SavedMatchAdmin)
+admin.site.register(SubscriptionTierConfig, SubscriptionTierConfigAdmin)
 
 admin.site.site_header = 'Constela Admin'
 admin.site.site_title = 'Constela'

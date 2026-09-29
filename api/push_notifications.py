@@ -98,12 +98,17 @@ def send_push_notification_to_user(user, title: str, body: str, data: Dict[str, 
         from api.models import Notification
         
         # Save to database (even if they don't have a push token, so they see it in the app)
-        notif_type = data.get("type", "system") if data else "system"
+        stored_data = dict(data or {})
+        # Signed R2 URLs expire; profile_id is the stable reference used by
+        # NotificationListView to generate a fresh avatar URL on every fetch.
+        stored_data.pop("sender_photo", None)
+        notif_type = stored_data.get("type", "system")
         Notification.objects.create(
             recipient=user,
             title=title,
             body=body,
-            type=notif_type
+            type=notif_type,
+            data=stored_data
         )
 
         profile = getattr(user, 'profile', None)
