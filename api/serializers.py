@@ -222,7 +222,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = UserProfile
         fields = (
             'id', 'user', 'username', 'age', 'height_cm', 'weight_kg', 
-            'gender', 'looking_for', 'marital_status', 'education_level', 
+            'gender', 'gender_preference', 'looking_for', 'marital_status', 'education_level', 
             'spoken_languages',
             'city', 'country', 'latitude', 'longitude', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'must_verify_face', 'onboarding_part1_completed',
             'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'neurotype_labels',

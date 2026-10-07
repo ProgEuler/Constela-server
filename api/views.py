@@ -47,19 +47,43 @@ from api.chat_media import (
 )
 
 def get_cloudinary_url(image_field):
-    """Return a guaranteed Cloudinary CDN URL for a stored ImageField."""
+    """Return a guaranteed Cloudinary CDN / R2 storage URL for a stored ImageField."""
     if not image_field:
         return None
-    if image_field.name.startswith('http://') or image_field.name.startswith('https://'):
-        return image_field.name
-        
-    url = image_field.url
-    if url.startswith('https://') or url.startswith('http://'):
+    name = getattr(image_field, 'name', '') or ''
+    if name.startswith('http://') or name.startswith('https://'):
+        return name
+
+    cache_key = f"presigned_img_url:{name}" if name else None
+    if cache_key:
+        try:
+            from django.core.cache import cache
+            cached_url = cache.get(cache_key)
+            if cached_url:
+                return cached_url
+        except Exception:
+            pass
+
+    try:
+        url = image_field.url
+    except Exception:
+        url = None
+
+    if url and (url.startswith('https://') or url.startswith('http://')):
+        if cache_key:
+            try:
+                from django.core.cache import cache
+                # AWS_QUERYSTRING_EXPIRE is 3600 (1 hour). Cache for 45 minutes (2700s)
+                # to provide stable URLs across repeated queries without expiring in-flight.
+                cache.set(cache_key, url, timeout=2700)
+            except Exception:
+                pass
         return url
+
     # Fallback: build CDN URL from the stored public_id
     try:
         import cloudinary.utils
-        cdn_url, _ = cloudinary.utils.cloudinary_url(image_field.name, secure=True)
+        cdn_url, _ = cloudinary.utils.cloudinary_url(name, secure=True)
         return cdn_url
     except Exception:
         return url
@@ -825,7 +849,11 @@ class PerfectMatchView(APIView):
         gender = request.query_params.get('gender')
         if gender:
             genders = [g.strip().lower() for g in gender.split(',')]
-            candidates = candidates.filter(gender__in=genders)
+            if 'everyone' not in genders:
+                candidates = candidates.filter(gender__in=genders)
+        else:
+            if me.gender_preference and me.gender_preference.lower() != 'everyone':
+                candidates = candidates.filter(gender=me.gender_preference)
 
         marital_status = request.query_params.get('marital_status')
         if marital_status:
@@ -1209,6 +1237,27 @@ class MatchAnalysisView(APIView):
         return Response({"results": top_matches}, status=status.HTTP_200_OK)
 
 
+def notify_threads_changed(profile_ids, thread_type):
+    """
+    Tell connected clients (over the chat socket) that their Dating/Friends
+    thread list changed so they refetch it right away. Runs after the DB
+    transaction commits and never breaks the calling request.
+    """
+    channel_layer = get_channel_layer()
+    if not channel_layer:
+        return
+    payload = {'type': 'threads_changed', 'thread_type': thread_type}
+
+    def _send():
+        for pid in profile_ids:
+            try:
+                async_to_sync(channel_layer.group_send)(f"inbox_{pid}", payload)
+            except Exception:
+                pass
+
+    transaction.on_commit(_send)
+
+
 class MatchActionView(APIView):
     """
     POST to like/dislike a profile. Enforces subscription limits.
@@ -1236,6 +1285,7 @@ class MatchActionView(APIView):
                     if mutual:
                         mutual.status = 'liked'
                         mutual.save()
+                    notify_threads_changed([me.id, target.id], 'dating')
                 match_obj.delete()
             return Response({"status": "undone", "is_mutual_match": False}, status=status.HTTP_200_OK)
             
@@ -1276,6 +1326,7 @@ class MatchActionView(APIView):
                     mutual.status = 'matched'
                     mutual.save()
                     is_mutual = True
+                    notify_threads_changed([me.id, target.id], 'dating')
 
                     me_photo = get_main_photo(me)
                     target_photo = get_main_photo(target)
@@ -1358,8 +1409,14 @@ class MutualMatchesView(APIView):
         ).select_related('user1__user', 'user2__user').prefetch_related('user1__photos', 'user2__photos').order_by('-created_at')
 
         results = []
+        seen_profile_ids = set()
         for m in matched:
             other = m.user2 if m.user1 == me else m.user1
+            if not other or getattr(other, 'is_deactivated', False):
+                continue
+            if other.id in seen_profile_ids:
+                continue
+            seen_profile_ids.add(other.id)
             results.append({
                 "match_id": m.id,
                 "matched_at": m.created_at,
@@ -1425,6 +1482,8 @@ class UnmatchUserView(APIView):
             Q(sender=me, receiver=target) | Q(sender=target, receiver=me)
         ).delete()
         
+        notify_threads_changed([me.id, target.id], 'dating')
+
         return Response({
             "message": "Unmatched successfully",
             "target_profile_id": str(target_profile_id)
@@ -1491,6 +1550,63 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             })
             
         return Response(requests_data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'])
+    def my_friends(self, request):
+        me = get_object_or_404(UserProfile, user=request.user)
+        friendships = list(
+            Friendship.objects.filter(
+                Q(sender=me) | Q(receiver=me),
+                status='accepted'
+            )
+            .select_related('sender__user', 'receiver__user')
+            .prefetch_related('sender__photos', 'receiver__photos')
+        )
+
+        friends_data = []
+        seen_friend_ids = set()
+        for f in friendships:
+            friend = f.receiver if f.sender_id == me.id else f.sender
+            if not friend or getattr(friend, 'is_deactivated', False):
+                continue
+            if friend.id in seen_friend_ids:
+                continue
+            seen_friend_ids.add(friend.id)
+            main_photo = get_main_photo(friend)
+            photo_url = get_cloudinary_url(main_photo.image) if main_photo else None
+            location = friend.city or friend.country or ""
+
+            interests_list = [i.lower() for i in (friend.interests or [])]
+            if len(interests_list) >= 3:
+                bio = f"Loves {interests_list[0]}, {interests_list[1]}, and {interests_list[2]}"
+            elif len(interests_list) == 2:
+                bio = f"Loves {interests_list[0]} and {interests_list[1]}"
+            elif len(interests_list) == 1:
+                bio = f"Loves {interests_list[0]}"
+            else:
+                bio = ""
+
+            friends_data.append({
+                "friendship_id": f.id,
+                "id": str(friend.id),
+                "name": friend.display_name,
+                "username": friend.username,
+                "age": friend.age,
+                "bio": bio,
+                "photo": photo_url,
+                "location": location,
+                "created_at": f.created_at.isoformat() if f.created_at else None,
+            })
+
+        search = request.query_params.get('search', '').strip().lower()
+        if search:
+            friends_data = [
+                f for f in friends_data
+                if search in (f['name'] or '').lower() or search in (f['username'] or '').lower()
+            ]
+
+        friends_data.sort(key=lambda x: (x['name'] or '').lower())
+        return Response(friends_data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'])
     def sent_requests(self, request):
@@ -1681,6 +1797,17 @@ class FriendshipViewSet(viewsets.ModelViewSet):
         if Block.objects.filter(Q(blocker=me, blocked_user=target) | Q(blocker=target, blocked_user=me)).exists():
             return Response({"error": "Blocked."}, status=status.HTTP_400_BAD_REQUEST)
             
+        # Check if friendship already exists in the reverse direction
+        reverse_friendship = Friendship.objects.filter(sender=target, receiver=me).first()
+        if reverse_friendship:
+            if reverse_friendship.status == 'accepted':
+                return Response({"message": "You are already friends."}, status=status.HTTP_200_OK)
+            elif reverse_friendship.status == 'pending':
+                reverse_friendship.status = 'accepted'
+                reverse_friendship.save()
+                notify_threads_changed([me.id, target.id], 'friends')
+                return Response({"message": "Friend request accepted."}, status=status.HTTP_200_OK)
+
         friendship, created = Friendship.objects.get_or_create(sender=me, receiver=target, defaults={'status': 'pending'})
         if not created and friendship.status == 'declined':
             friendship.status = 'pending'
@@ -1708,6 +1835,7 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             return Response({"error": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
         friendship.status = 'accepted'
         friendship.save()
+        notify_threads_changed([friendship.sender_id, friendship.receiver_id], 'friends')
         
         if getattr(friendship.sender, 'messages_push', True):
             receiver_photo = get_main_photo(friendship.receiver)
@@ -1738,7 +1866,10 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             Q(sender=instance.sender, receiver=instance.receiver) |
             Q(sender=instance.receiver, receiver=instance.sender)
         ).delete()
+        sender_id = instance.sender_id
+        receiver_id = instance.receiver_id
         instance.delete()
+        notify_threads_changed([sender_id, receiver_id], 'friends')
 
 class UnfriendUserView(APIView):
     """
@@ -1758,6 +1889,8 @@ class UnfriendUserView(APIView):
             Q(sender=me, receiver=target) | Q(sender=target, receiver=me)
         ).delete()
         
+        notify_threads_changed([me.id, target.id], 'friends')
+
         return Response({
             "message": "Unfriended successfully",
             "target_profile_id": str(target_profile_id)
@@ -1915,7 +2048,7 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
             sender=OuterRef('pk'), receiver=me, read_at__isnull=True
         ).values('sender').annotate(total=Count('id')).values('total')
 
-        partners = UserProfile.objects.filter(id__in=relationship_dates).select_related('user').prefetch_related('photos').annotate(
+        partners = UserProfile.objects.filter(id__in=relationship_dates, is_deactivated=False).select_related('user').prefetch_related('photos').annotate(
             last_message_content=Subquery(latest_message.values('content')[:1]),
             last_message_image=Subquery(latest_message.values('image_url')[:1]),
             last_message_audio=Subquery(latest_message.values('audio_url')[:1]),
@@ -2120,6 +2253,8 @@ class BlockViewSet(viewsets.ViewSet):
             ).delete()
 
             Block.objects.create(blocker=me, blocked_user=target)
+            notify_threads_changed([me.id, target.id], 'dating')
+            notify_threads_changed([me.id, target.id], 'friends')
             return Response({"message": f"{target.username} has been blocked."}, status=status.HTTP_201_CREATED)
 
         elif request.method == 'DELETE':

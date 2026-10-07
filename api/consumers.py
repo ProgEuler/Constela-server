@@ -367,6 +367,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'status': event['status'],
         }, cls=DjangoJSONEncoder))
 
+    async def threads_changed(self, event):
+        try:
+            await self.send(text_data=json.dumps({
+                'type': 'threads_changed',
+                'thread_type': event.get('thread_type'),
+            }))
+        except Exception:
+            pass
+
     async def message_reaction_broadcast(self, event):
         await self.send(text_data=json.dumps({
             'type': 'message_reaction',

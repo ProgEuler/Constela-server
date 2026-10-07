@@ -56,7 +56,15 @@ class UserProfile(models.Model):
     age = models.IntegerField(null=True, blank=True)
     height_cm = models.IntegerField(null=True, blank=True)
     weight_kg = models.IntegerField(null=True, blank=True)
+    GENDER_PREFERENCE_CHOICES = (
+        ('woman', 'Woman'),
+        ('man', 'Man'),
+        ('non_binary', 'Non-Binary'),
+        ('other', 'Other'),
+        ('everyone', 'Everyone'),
+    )
     gender = models.CharField(max_length=20, choices=GENDER_CHOICES, null=True, blank=True)
+    gender_preference = models.CharField(max_length=20, choices=GENDER_PREFERENCE_CHOICES, null=True, blank=True)
     looking_for = models.CharField(max_length=20, choices=LOOKING_FOR_CHOICES, null=True, blank=True)
     marital_status = models.CharField(max_length=20, choices=MARITAL_CHOICES, null=True, blank=True)
     education_level = models.CharField(max_length=100, null=True, blank=True)
