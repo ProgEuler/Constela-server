@@ -9,8 +9,11 @@ from django.db import transaction
 from django.db.models import Q
 from api.subscriptions import consume_usage, quota_snapshot
 from django.utils import timezone
-from api.models import UserProfile, Match, Friendship, DirectMessage, ChatRoom, ChatRoomMessage, Block
-from api.serializers import DirectMessageSerializer, ChatRoomMessageSerializer
+from api.models import (
+    UserProfile, Match, Friendship, DirectMessage, ChatRoom, ChatRoomMessage, Block,
+    DirectMessageReaction, ChatRoomMessageReaction,
+)
+from api.serializers import DirectMessageSerializer, ChatRoomMessageSerializer, reaction_summary
 from api.chat_media import audio_storage_key, image_storage_key, verify_audio_upload, verify_image_upload
 
 logger = logging.getLogger(__name__)
@@ -203,15 +206,36 @@ class ChatConsumer(AsyncWebsocketConsumer):
             message_id = data.get('message_id')
             reaction = data.get('reaction')
             if message_id and (reaction is None or len(str(reaction)) <= 20):
-                participant_ids = await self.save_message_reaction(message_id, reaction, self.profile.id)
-                if participant_ids:
+                result = await self.save_message_reaction(message_id, reaction, self.profile.id)
+                if result:
+                    participant_ids, reactions = result
                     payload = {
                         'type': 'message_reaction_broadcast',
                         'message_id': message_id,
                         'reaction': reaction,
+                        'reactions': reactions,
                     }
                     for participant_id in participant_ids:
                         await self.channel_layer.group_send(f"inbox_{participant_id}", payload)
+
+        elif msg_type == 'room_message_reaction':
+            message_id = data.get('message_id')
+            reaction = data.get('reaction')
+            room_id = data.get('room_id')
+            if message_id and room_id and (reaction is None or len(str(reaction)) <= 20):
+                reactions = await self.save_room_message_reaction(
+                    message_id, reaction, self.profile.id, room_id
+                )
+                if reactions is not None:
+                    payload = {
+                        'type': 'room_message_reaction',
+                        'message_id': message_id,
+                        'room_id': room_id,
+                        'reaction': reaction,
+                        'reactions': reactions,
+                    }
+                    await self.channel_layer.group_send(f"room_{room_id}", payload)
+                    await self.channel_layer.group_send(f"inbox_{self.profile.id}", payload)
 
         elif msg_type == 'typing':
             recipient_id = data.get('recipient_id')
@@ -284,6 +308,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             room_id = data.get('room_id')
             content = data.get('content')
             temp_id = data.get('temp_id')
+            reply_to_id = data.get('reply_to_id')
 
             if not room_id or not content:
                 return
@@ -297,7 +322,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 }))
                 return
 
-            msg_data = await self.save_room_message(self.profile, room_id, content)
+            msg_data = await self.save_room_message(self.profile, room_id, content, reply_to_id)
             if msg_data and msg_data.get('message'):
                 payload = {
                     'type': 'room_message',
@@ -438,9 +463,43 @@ class ChatConsumer(AsyncWebsocketConsumer):
         ).first()
         if not msg:
             return None
-        msg.reaction = reaction
+        existing = DirectMessageReaction.objects.filter(message=msg, actor_id=actor_id).first()
+        if reaction is None:
+            if existing:
+                existing.delete()
+        elif existing:
+            if existing.emoji == reaction:
+                existing.delete()          # tapping the same emoji again removes it
+            else:
+                existing.emoji = reaction
+                existing.save(update_fields=['emoji'])
+        else:
+            DirectMessageReaction.objects.create(message=msg, actor_id=actor_id, emoji=reaction)
+        reactions = reaction_summary(DirectMessageReaction.objects.filter(message=msg))
+        # Keep the legacy single-reaction field in sync for older clients.
+        msg.reaction = reactions[-1]['emoji'] if reactions else None
         msg.save(update_fields=['reaction'])
-        return [str(msg.sender_id), str(msg.receiver_id)]
+        return [str(msg.sender_id), str(msg.receiver_id)], reactions
+
+    @database_sync_to_async
+    @transaction.atomic
+    def save_room_message_reaction(self, message_id, reaction, actor_id, room_id):
+        msg = ChatRoomMessage.objects.filter(id=message_id, room_id=room_id).first()
+        if not msg:
+            return None
+        existing = ChatRoomMessageReaction.objects.filter(message=msg, actor_id=actor_id).first()
+        if reaction is None:
+            if existing:
+                existing.delete()
+        elif existing:
+            if existing.emoji == reaction:
+                existing.delete()          # toggle off
+            else:
+                existing.emoji = reaction
+                existing.save(update_fields=['emoji'])
+        else:
+            ChatRoomMessageReaction.objects.create(message=msg, actor_id=actor_id, emoji=reaction)
+        return reaction_summary(ChatRoomMessageReaction.objects.filter(message=msg))
 
     @database_sync_to_async
     def get_connected_partner_ids(self, profile_id):
@@ -598,7 +657,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     @transaction.atomic
-    def save_room_message(self, sender_profile, room_id, content):
+    def save_room_message(self, sender_profile, room_id, content, reply_to_id=None):
         room = ChatRoom.objects.get(id=room_id)
         sender_profile = UserProfile.objects.select_for_update().get(id=sender_profile.id)
         if not consume_usage(sender_profile, 'community_messages'):
@@ -607,10 +666,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'code': 'DAILY_COMMUNITY_MESSAGE_LIMIT_REACHED',
                 'quota': quota_snapshot(sender_profile, 'community_messages'),
             }
+        # Only allow replying to a message that belongs to the same room.
+        reply_to = None
+        if reply_to_id:
+            reply_to = ChatRoomMessage.objects.filter(id=reply_to_id, room=room).first()
         msg = ChatRoomMessage.objects.create(
             room=room,
             sender=sender_profile,
-            content=content
+            content=content,
+            reply_to=reply_to
         )
         return {
             'message': ChatRoomMessageSerializer(msg).data,

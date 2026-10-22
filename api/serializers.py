@@ -338,11 +338,15 @@ class DirectMessageSerializer(serializers.ModelSerializer):
     audio_url = serializers.SerializerMethodField()
     audio_url_expires_at = serializers.SerializerMethodField()
     reply_to_info = serializers.SerializerMethodField(read_only=True)
+    reactions = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = DirectMessage
-        fields = ('id', 'sender', 'receiver', 'sender_name', 'receiver_name', 'sender_photo', 'receiver_photo', 'content', 'timestamp', 'read_at', 'image_url', 'image_url_expires_at', 'audio_url', 'audio_url_expires_at', 'audio_duration', 'reply_to', 'reply_to_info', 'reaction')
+        fields = ('id', 'sender', 'receiver', 'sender_name', 'receiver_name', 'sender_photo', 'receiver_photo', 'content', 'timestamp', 'read_at', 'image_url', 'image_url_expires_at', 'audio_url', 'audio_url_expires_at', 'audio_duration', 'reply_to', 'reply_to_info', 'reaction', 'reactions')
         read_only_fields = ('id', 'sender', 'timestamp', 'read_at')
+
+    def get_reactions(self, obj):
+        return reaction_summary(obj.reactions.all())
 
     def get_reply_to_info(self, obj):
         if obj.reply_to:
@@ -428,11 +432,27 @@ class ChatRoomSerializer(serializers.ModelSerializer):
 class ChatRoomMessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.ReadOnlyField(source='sender.display_name')
     sender_photo = serializers.SerializerMethodField()
+    reply_to_info = serializers.SerializerMethodField(read_only=True)
+    reactions = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ChatRoomMessage
-        fields = ('id', 'room', 'sender', 'sender_name', 'sender_photo', 'content', 'timestamp')
+        fields = ('id', 'room', 'sender', 'sender_name', 'sender_photo', 'content', 'timestamp', 'reply_to', 'reply_to_info', 'reactions')
         read_only_fields = ('id', 'sender', 'timestamp')
+
+    def get_reactions(self, obj):
+        return reaction_summary(obj.reactions.all())
+
+    def get_reply_to_info(self, obj):
+        if not obj.reply_to_id:
+            return None
+        replied = obj.reply_to
+        return {
+            'id': str(replied.id),
+            'content': replied.content,
+            'sender_id': str(replied.sender_id),
+            'sender_name': replied.sender.display_name,
+        }
 
     def get_sender_photo(self, obj):
         from .views import get_cloudinary_url
@@ -459,6 +479,18 @@ class SupportTicketSerializer(serializers.ModelSerializer):
         model = SupportTicket
         fields = ('id', 'user', 'user_name', 'user_email', 'email', 'subject', 'description', 'priority', 'status', 'created_at', 'updated_at', 'replies')
         read_only_fields = ('id', 'user', 'created_at', 'updated_at', 'replies')
+
+def reaction_summary(reactions):
+    """Group reaction rows into [{emoji, count, actor_ids}] for the client."""
+    grouped = {}
+    for reaction in reactions:
+        entry = grouped.setdefault(
+            reaction.emoji, {'emoji': reaction.emoji, 'count': 0, 'actor_ids': []}
+        )
+        entry['count'] += 1
+        entry['actor_ids'].append(str(reaction.actor_id))
+    return list(grouped.values())
+
 
 class ReportSerializer(serializers.ModelSerializer):
     reporter_name = serializers.ReadOnlyField(source='reporter.username')

@@ -1096,6 +1096,7 @@ class PerfectMatchView(APIView):
                 "city": candidate.city,
                 "country": candidate.country,
                 "bio": bio,
+                "bio_interests": interests_list,
                 "tags": qualities_display,
                 "photo": photo_url,
                 "compatibility_score": score,
@@ -1593,6 +1594,7 @@ class FriendshipViewSet(viewsets.ModelViewSet):
                 "username": friend.username,
                 "age": friend.age,
                 "bio": bio,
+                "bio_interests": interests_list,
                 "photo": photo_url,
                 "location": location,
                 "created_at": f.created_at.isoformat() if f.created_at else None,
@@ -1663,6 +1665,7 @@ class FriendshipViewSet(viewsets.ModelViewSet):
                 "age": receiver.age,
                 "tags": tags,
                 "bio": bio,
+                "bio_interests": interests_list,
                 "photo": photo_url,
                 "subtitle": subtitle,
                 "mutual_friends_count": mutual_count,
@@ -1779,6 +1782,7 @@ class FriendshipViewSet(viewsets.ModelViewSet):
                 "age": candidate.age,
                 "tags": tags,
                 "bio": bio,
+                "bio_interests": interests_list,
                 "photo": photo_url
             })
 
@@ -1905,7 +1909,12 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         me = get_object_or_404(UserProfile, user=self.request.user)
-        queryset = accessible_rooms(me).prefetch_related('members__photos')
+        queryset = accessible_rooms(me)
+        # Only the room list/detail render member avatars. The `messages` action
+        # used to prefetch every member and every photo just to return 50
+        # messages, which made opening a group chat slow for big rooms.
+        if self.action in ('list', 'retrieve'):
+            queryset = queryset.prefetch_related('members__photos')
         search_query = self.request.query_params.get('search')
         if search_query:
             queryset = queryset.filter(Q(name__icontains=search_query) | Q(description__icontains=search_query))
@@ -1921,7 +1930,15 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
     def messages(self, request, pk=None):
         room = self.get_object()
         before = request.query_params.get('before')
-        messages_qs = room.messages.select_related('sender').prefetch_related('sender__photos')
+        messages_qs = (
+            room.messages
+            # reply_to_info touches reply_to + its sender; without this every
+            # reply costs two extra queries (N+1 across the 50-message page).
+            # display_name reads sender.user.first_name, so sender__user must be
+            # joined too — otherwise it is one extra query per message.
+            .select_related('sender__user', 'reply_to', 'reply_to__sender__user')
+            .prefetch_related('sender__photos', 'reactions')
+        )
         if before:
             messages_qs = messages_qs.filter(timestamp__lt=before)
         messages_qs = messages_qs.order_by('-timestamp')[:50]
@@ -2110,7 +2127,7 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
             messages = messages.filter(timestamp__lt=before)
 
         messages = messages.select_related('sender__user', 'receiver__user').prefetch_related(
-            'sender__photos', 'receiver__photos'
+            'sender__photos', 'receiver__photos', 'reactions'
         ).order_by('-timestamp')[:50]
         
         serializer = self.get_serializer(messages, many=True)

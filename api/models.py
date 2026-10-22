@@ -317,9 +317,46 @@ class ChatRoomMessage(models.Model):
     sender = models.ForeignKey(UserProfile, on_delete=models.CASCADE)
     content = models.TextField()
     timestamp = models.DateTimeField(auto_now_add=True)
+    reply_to = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True, related_name='room_replies'
+    )
 
     def __str__(self):
         return f"Room {self.room.name}: {self.sender.username} at {self.timestamp}"
+
+class DirectMessageReaction(models.Model):
+    """A reaction to a direct message (one reaction per user per message)."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    message = models.ForeignKey(DirectMessage, on_delete=models.CASCADE, related_name='reactions')
+    actor = models.ForeignKey(UserProfile, on_delete=models.CASCADE)
+    emoji = models.CharField(max_length=16)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['message', 'actor'], name='uniq_dm_reaction_per_actor'),
+        ]
+
+    def __str__(self):
+        return f"{self.emoji} on DM {self.message_id}"
+
+
+class ChatRoomMessageReaction(models.Model):
+    """A reaction to a community room message (one reaction per user per message)."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    message = models.ForeignKey(ChatRoomMessage, on_delete=models.CASCADE, related_name='reactions')
+    actor = models.ForeignKey(UserProfile, on_delete=models.CASCADE)
+    emoji = models.CharField(max_length=16)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['message', 'actor'], name='uniq_room_reaction_per_actor'),
+        ]
+
+    def __str__(self):
+        return f"{self.emoji} on room message {self.message_id}"
+
 
 class SupportTicket(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
