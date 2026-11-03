@@ -3,6 +3,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Union, Dict, Any
 from django.conf import settings
+from django.db import close_old_connections
 
 import firebase_admin
 from firebase_admin import credentials, messaging
@@ -10,12 +11,15 @@ from firebase_admin import credentials, messaging
 logger = logging.getLogger(__name__)
 _push_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="fcm")
 
+# FCM errors that mean the token will never work again (app uninstalled, token rotated, wrong project).
+_DEAD_TOKEN_ERRORS = (messaging.UnregisteredError, messaging.SenderIdMismatchError)
+
 # Initialize Firebase Admin SDK
 # Check if already initialized to prevent errors on hot-reloads
 if not firebase_admin._apps:
     env_creds = os.environ.get("FIREBASE_CREDENTIALS_JSON")
     cred_path = os.path.join(settings.BASE_DIR, 'firebase-service-account.json')
-    
+
     if env_creds:
         import json
         try:
@@ -33,17 +37,14 @@ if not firebase_admin._apps:
         logger.warning(f"⚠️ Firebase credential not found in ENV or at {cred_path}")
 
 
-def send_expo_push_notification(
+def send_fcm_push(
     push_tokens: Union[str, List[str]],
     title: str,
     body: str,
     data: Dict[str, Any] = None,
-    sound: str = "default",
-    badge: int = None
 ) -> Dict[str, Any]:
     """
-    Sends Native Firebase Cloud Messaging (FCM) Push Notifications.
-    (Kept function name for backward compatibility with views.py)
+    Sends Firebase Cloud Messaging (FCM) push notifications and forgets tokens FCM reports as dead.
     """
     if isinstance(push_tokens, str):
         push_tokens = [push_tokens]
@@ -58,45 +59,79 @@ def send_expo_push_notification(
         logger.error("❌ Firebase Admin SDK not initialized.")
         return {"status": "error", "message": "Firebase Admin SDK not initialized."}
 
-    messages = []
-    for token in valid_tokens:
-        msg = messaging.Message(
-            notification=messaging.Notification(
-                title=title,
-                body=body,
-            ),
-            data={str(k): str(v) for k, v in data.items()} if data else None,
+    # FCM data payloads only accept string values.
+    payload = {str(k): str(v) for k, v in (data or {}).items() if v is not None}
+    messages = [
+        messaging.Message(
+            notification=messaging.Notification(title=title, body=body),
+            data=payload or None,
+            android=messaging.AndroidConfig(priority='high'),
+            apns=messaging.APNSConfig(payload=messaging.APNSPayload(aps=messaging.Aps(sound='default'))),
             token=token,
         )
-        messages.append(msg)
+        for token in valid_tokens
+    ]
 
-    # Send all messages
-    responses = []
-    success_count = 0
-    failure_count = 0
-    
-    for msg in messages:
-        try:
-            response = messaging.send(msg)
-            responses.append({"status": "success", "response": response})
-            success_count += 1
-        except Exception as e:
-            logger.error(f"❌ Failed to send FCM notification: {e}")
-            responses.append({"status": "error", "message": str(e)})
-            failure_count += 1
+    try:
+        batch = messaging.send_each(messages)
+    except Exception as e:
+        logger.error(f"❌ Failed to send FCM notifications: {e}")
+        return {"status": "error", "message": str(e)}
 
-    logger.info(f"✅ FCM push notification sent. Success: {success_count}, Failures: {failure_count}")
-    return {"status": "completed", "success": success_count, "failures": failure_count, "details": responses}
+    dead_tokens = []
+    for token, response in zip(valid_tokens, batch.responses):
+        if response.success:
+            continue
+        logger.error(f"❌ Failed to send FCM notification: {response.exception}")
+        if isinstance(response.exception, _DEAD_TOKEN_ERRORS):
+            dead_tokens.append(token)
+
+    if dead_tokens:
+        from api.models import PushDevice
+        PushDevice.objects.filter(token__in=dead_tokens).delete()
+        logger.info(f"Removed {len(dead_tokens)} dead push token(s).")
+
+    logger.info(f"✅ FCM push notification sent. Success: {batch.success_count}, Failures: {batch.failure_count}")
+    return {"status": "completed", "success": batch.success_count, "failures": batch.failure_count}
+
+
+def _send_in_background(**kwargs):
+    # Worker threads keep their own DB connection; drop it if it has gone stale between jobs.
+    close_old_connections()
+    try:
+        return send_fcm_push(**kwargs)
+    finally:
+        close_old_connections()
+
+
+def queue_push_to_profile(profile, title: str, body: str, data: Dict[str, Any] = None) -> bool:
+    """
+    Pushes to every device the profile is signed in on, without saving an in-app Notification.
+    Returns False when the profile has no registered device.
+    """
+    tokens = list(profile.push_devices.values_list('token', flat=True))
+    if not tokens:
+        return False
+
+    # Push delivery is best-effort; never hold an API response open on FCM network latency.
+    _push_executor.submit(
+        _send_in_background,
+        push_tokens=tokens,
+        title=title,
+        body=body,
+        data=data,
+    )
+    return True
 
 
 def send_push_notification_to_user(user, title: str, body: str, data: Dict[str, Any] = None) -> bool:
     """
-    Convenience helper to send a push notification to a specific User instance.
-    Checks profile push_token and user notification preferences.
+    Saves an in-app Notification for the user and pushes it to their devices.
+    Callers are responsible for checking the user's push preferences.
     """
     try:
         from api.models import Notification
-        
+
         # Save to database (even if they don't have a push token, so they see it in the app)
         stored_data = dict(data or {})
         # Signed R2 URLs expire; profile_id is the stable reference used by
@@ -112,19 +147,43 @@ def send_push_notification_to_user(user, title: str, body: str, data: Dict[str, 
         )
 
         profile = getattr(user, 'profile', None)
-        if not profile or not profile.push_token:
+        if not profile or not queue_push_to_profile(profile, title, body, data):
             logger.info(f"User {user.email} has no registered push token. (Notification saved to DB only)")
             return False
-
-        # Push delivery is best-effort; never hold an API response open on FCM network latency.
-        _push_executor.submit(
-            send_expo_push_notification,
-            push_tokens=profile.push_token,
-            title=title,
-            body=body,
-            data=data,
-        )
         return True
     except Exception as e:
         logger.error(f"Error sending push notification to user {user}: {e}")
         return False
+
+
+def notify_direct_message(message) -> None:
+    """
+    Pushes a new direct message to the receiver. Chat messages stay out of the in-app
+    Notification list; the inbox already shows them.
+    """
+    receiver = message.receiver
+    if not getattr(receiver, 'messages_push', True):
+        return
+
+    if message.content:
+        body = message.content if len(message.content) <= 120 else message.content[:117] + '...'
+    elif message.image_url:
+        body = '📷 Photo'
+    elif message.audio_url:
+        body = '🎤 Voice message'
+    else:
+        body = 'New message'
+
+    try:
+        queue_push_to_profile(
+            receiver,
+            title=message.sender.display_name,
+            body=body,
+            data={
+                "type": "message",
+                "profile_id": str(message.sender_id),
+                "message_id": str(message.id),
+            },
+        )
+    except Exception as e:
+        logger.error(f"Error sending message push for {message.id}: {e}")

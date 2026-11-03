@@ -15,6 +15,7 @@ from api.models import (
 )
 from api.serializers import DirectMessageSerializer, ChatRoomMessageSerializer, reaction_summary
 from api.chat_media import audio_storage_key, image_storage_key, verify_audio_upload, verify_image_upload
+from api.push_notifications import notify_direct_message
 
 logger = logging.getLogger(__name__)
 PRESENCE_TIMEOUT = 50  # 2× heartbeat interval (25s) for faster online/offline accuracy
@@ -608,6 +609,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 audio_duration=audio_duration,
                 reply_to=reply_to
             )
+            transaction.on_commit(lambda: notify_direct_message(msg))
             # Use DjangoJSONEncoder to handle UUIDs, datetimes etc.
             data = DirectMessageSerializer(msg).data
             return {

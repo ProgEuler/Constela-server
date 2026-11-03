@@ -121,7 +121,6 @@ class UserProfile(models.Model):
     # Flags & Preferences
     likes_push = models.BooleanField(default=True)
     messages_push = models.BooleanField(default=True)
-    push_token = models.CharField(max_length=255, blank=True, null=True)
     is_dark_mode = models.BooleanField(default=False)
     preferred_language = models.CharField(max_length=10, default='en')
     is_deactivated = models.BooleanField(default=False)
@@ -275,6 +274,16 @@ class Friendship(models.Model):
 
     def __str__(self):
         return f"Friendship: {self.sender.username} -> {self.receiver.username} ({self.status})"
+
+class PushDevice(models.Model):
+    """One FCM registration token per installed device, so every device a user is signed in on gets pushes."""
+    profile = models.ForeignKey(UserProfile, on_delete=models.CASCADE, related_name='push_devices')
+    token = models.CharField(max_length=255, unique=True)
+    platform = models.CharField(max_length=10, blank=True, default='')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"PushDevice: {self.profile.username} ({self.platform or 'unknown'})"
 
 class DirectMessage(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

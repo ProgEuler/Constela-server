@@ -23,7 +23,7 @@ from api.models import (
     User, UserProfile, UserPhoto, Match, Friendship, 
     DirectMessage, ChatRoom, ChatRoomMessage, SupportTicket, 
     SupportTicketReply, Report, Block, Transaction, OTPLog, SavedMatch,
-    AdminActionLog
+    AdminActionLog, PushDevice
 )
 from api.serializers import (
     UserSerializer, UserRegisterSerializer, OTPVerifySerializer,
@@ -36,7 +36,7 @@ from api.serializers import (
 from api.subscriptions import access_snapshot, accessible_rooms, consume_usage, payment_history, quota_snapshot
 from api.permissions import IsMember, IsSupportAgent, IsModerator, IsAdminUser, IsSuperAdmin
 from api.matching_engine import calculate_compatibility
-from api.push_notifications import send_push_notification_to_user
+from api.push_notifications import notify_direct_message, send_push_notification_to_user
 from api.chat_media import (
     audio_storage_key,
     image_storage_key,
@@ -302,21 +302,33 @@ class GoogleAuthView(APIView):
 
 class RegisterPushTokenView(APIView):
     """
-    POST /api/auth/push-token/
-    Registers or updates the Expo / FCM push token for the authenticated user profile.
+    POST /api/auth/push-token/    Registers this device's FCM token for the authenticated user.
+    DELETE /api/auth/push-token/  Unregisters it (called on logout).
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        push_token = request.data.get('push_token', '').strip()
+        push_token = str(request.data.get('push_token') or '').strip()
+        if not push_token:
+            return Response({"error": "push_token is required."}, status=status.HTTP_400_BAD_REQUEST)
+        platform = str(request.data.get('platform') or '')[:10]
+
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
+        # A device token moves to whoever signed in on that device last.
+        PushDevice.objects.update_or_create(
+            token=push_token,
+            defaults={'profile': profile, 'platform': platform},
+        )
+
+        return Response({"message": "Push token registered successfully."}, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        push_token = str(request.data.get('push_token') or '').strip()
         if not push_token:
             return Response({"error": "push_token is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        profile, created = UserProfile.objects.get_or_create(user=request.user)
-        profile.push_token = push_token
-        profile.save()
-
-        return Response({"message": "Push token registered successfully."}, status=status.HTTP_200_OK)
+        PushDevice.objects.filter(token=push_token, profile__user=request.user).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 class ResendOTPView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -2207,6 +2219,7 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
             reply_to=reply_msg
         )
         serializer = self.get_serializer(message)
+        transaction.on_commit(lambda: notify_direct_message(message))
 
         # Broadcast via WebSocket Channel Layer so the receiver gets the live update
         channel_layer = get_channel_layer()
