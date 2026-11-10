@@ -138,6 +138,10 @@ else:
 
 INSTALLED_APPS = [
     'daphne',
+    # Unfold admin theme (must come before django.contrib.admin)
+    'unfold',
+    'unfold.contrib.filters',
+    'unfold.contrib.forms',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -261,6 +265,84 @@ STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 # Don't crash if a file is missing from the manifest (e.g. collectstatic not yet run)
 WHITENOISE_MANIFEST_STRICT = False
+
+# Unfold admin theme
+from django.urls import reverse_lazy
+
+def _admin_link(title, icon, app_model):
+    return {
+        'title': title,
+        'icon': icon,
+        'link': reverse_lazy(f'admin:{app_model}_changelist'),
+    }
+
+UNFOLD = {
+    'SITE_TITLE': 'Constela',
+    'SITE_HEADER': 'Constela Admin',
+    'SITE_SUBHEADER': 'Backend Management',
+    'SITE_SYMBOL': 'favorite',
+    'SHOW_HISTORY': True,
+    'SHOW_VIEW_ON_SITE': False,
+    'SIDEBAR': {
+        'show_search': True,
+        'show_all_applications': True,
+        'navigation': [
+            {
+                'title': 'Dashboard',
+                'items': [
+                    {'title': 'Overview', 'icon': 'dashboard', 'link': reverse_lazy('admin:index')},
+                ],
+            },
+            {
+                'title': 'Users',
+                'separator': True,
+                'items': [
+                    _admin_link('Users', 'person', 'api_user'),
+                    _admin_link('Profiles', 'badge', 'api_userprofile'),
+                    _admin_link('Photos', 'photo_library', 'api_userphoto'),
+                    _admin_link('Groups', 'group', 'auth_group'),
+                ],
+            },
+            {
+                'title': 'Connections',
+                'separator': True,
+                'items': [
+                    _admin_link('Matches', 'favorite', 'api_match'),
+                    _admin_link('Saved Matches', 'bookmark', 'api_savedmatch'),
+                    _admin_link('Friendships', 'handshake', 'api_friendship'),
+                    _admin_link('Blocks', 'block', 'api_block'),
+                ],
+            },
+            {
+                'title': 'Messaging',
+                'separator': True,
+                'items': [
+                    _admin_link('Direct Messages', 'chat', 'api_directmessage'),
+                    _admin_link('Chat Rooms', 'forum', 'api_chatroom'),
+                    _admin_link('Room Messages', 'chat_bubble', 'api_chatroommessage'),
+                ],
+            },
+            {
+                'title': 'Moderation & Support',
+                'separator': True,
+                'items': [
+                    _admin_link('Reports', 'flag', 'api_report'),
+                    _admin_link('Support Tickets', 'support_agent', 'api_supportticket'),
+                    _admin_link('Ticket Replies', 'reply', 'api_supportticketreply'),
+                    _admin_link('OTP Logs', 'password', 'api_otplog'),
+                ],
+            },
+            {
+                'title': 'Billing',
+                'separator': True,
+                'items': [
+                    _admin_link('Transactions', 'receipt_long', 'api_transaction'),
+                    _admin_link('Subscription Tiers', 'workspace_premium', 'api_subscriptiontierconfig'),
+                ],
+            },
+        ],
+    },
+}
 
 # Custom User Model
 AUTH_USER_MODEL = 'api.User'

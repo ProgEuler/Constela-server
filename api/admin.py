@@ -1,6 +1,10 @@
 from django.contrib import admin
+from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin
 from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.models import Group
 from django.utils.html import format_html
+from unfold.admin import ModelAdmin, StackedInline, TabularInline
+from unfold.forms import AdminPasswordChangeForm, UserChangeForm, UserCreationForm
 from api.models import (
     User, UserProfile, UserPhoto, Match, Friendship,
     DirectMessage, ChatRoom, ChatRoomMessage, SupportTicket,
@@ -12,8 +16,11 @@ from api.models import (
 # ──────────────────────────────────────────────────────────────
 # USER
 # ──────────────────────────────────────────────────────────────
-class CustomUserAdmin(UserAdmin):
+class CustomUserAdmin(UserAdmin, ModelAdmin):
     model = User
+    form = UserChangeForm
+    add_form = UserCreationForm
+    change_password_form = AdminPasswordChangeForm
     list_display = ('email', 'username', 'role', 'is_verified', 'is_active', 'date_joined')
     list_filter = ('role', 'is_verified', 'is_staff', 'is_active')
     search_fields = ('email', 'username')
@@ -35,7 +42,7 @@ class CustomUserAdmin(UserAdmin):
 # ──────────────────────────────────────────────────────────────
 # USER PHOTO (inline inside UserProfile)
 # ──────────────────────────────────────────────────────────────
-class UserPhotoInline(admin.TabularInline):
+class UserPhotoInline(TabularInline):
     model = UserPhoto
     extra = 0
     fields = ('image_preview', 'image', 'is_main', 'is_verified', 'uploaded_at')
@@ -59,7 +66,7 @@ class UserPhotoInline(admin.TabularInline):
 # ──────────────────────────────────────────────────────────────
 # USER PROFILE
 # ──────────────────────────────────────────────────────────────
-class UserProfileAdmin(admin.ModelAdmin):
+class UserProfileAdmin(ModelAdmin):
     inlines = [UserPhotoInline]
     list_display = ('username', 'user_email', 'gender', 'age', 'city', 'country',
                     'subscription_tier', 'subscription_product_id', 'is_verified', 'profile_completion_pct')
@@ -138,7 +145,7 @@ class UserProfileAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # USER PHOTO (standalone)
 # ──────────────────────────────────────────────────────────────
-class UserPhotoAdmin(admin.ModelAdmin):
+class UserPhotoAdmin(ModelAdmin):
     list_display = ('id', 'profile', 'image_preview', 'is_main', 'is_verified', 'uploaded_at')
     list_filter = ('is_main', 'is_verified')
     search_fields = ('profile__username',)
@@ -163,7 +170,7 @@ class UserPhotoAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # MATCH
 # ──────────────────────────────────────────────────────────────
-class MatchAdmin(admin.ModelAdmin):
+class MatchAdmin(ModelAdmin):
     list_display = ('user1', 'user2', 'status', 'created_at')
     list_filter = ('status',)
     search_fields = ('user1__username', 'user2__username')
@@ -174,7 +181,7 @@ class MatchAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # FRIENDSHIP
 # ──────────────────────────────────────────────────────────────
-class FriendshipAdmin(admin.ModelAdmin):
+class FriendshipAdmin(ModelAdmin):
     list_display = ('sender', 'receiver', 'status', 'created_at')
     list_filter = ('status',)
     search_fields = ('sender__username', 'receiver__username')
@@ -185,7 +192,7 @@ class FriendshipAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # DIRECT MESSAGE
 # ──────────────────────────────────────────────────────────────
-class DirectMessageAdmin(admin.ModelAdmin):
+class DirectMessageAdmin(ModelAdmin):
     list_display = ('sender', 'receiver', 'content_snippet', 'timestamp', 'read_at')
     search_fields = ('sender__username', 'receiver__username')
     fields = ('sender', 'receiver', 'content', 'timestamp', 'read_at')
@@ -199,14 +206,14 @@ class DirectMessageAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # CHAT ROOM
 # ──────────────────────────────────────────────────────────────
-class ChatRoomMessageInline(admin.TabularInline):
+class ChatRoomMessageInline(TabularInline):
     model = ChatRoomMessage
     extra = 0
     fields = ('sender', 'content', 'timestamp')
     readonly_fields = ('timestamp',)
 
 
-class ChatRoomAdmin(admin.ModelAdmin):
+class ChatRoomAdmin(ModelAdmin):
     inlines = [ChatRoomMessageInline]
     list_display = ('name', 'status', 'member_count', 'created_at')
     list_filter = ('status',)
@@ -216,7 +223,7 @@ class ChatRoomAdmin(admin.ModelAdmin):
     filter_horizontal = ('members',)
 
 
-class ChatRoomMessageAdmin(admin.ModelAdmin):
+class ChatRoomMessageAdmin(ModelAdmin):
     list_display = ('room', 'sender', 'content_snippet', 'timestamp')
     search_fields = ('room__name', 'sender__username')
     fields = ('room', 'sender', 'content', 'timestamp')
@@ -230,14 +237,14 @@ class ChatRoomMessageAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # SUPPORT TICKET
 # ──────────────────────────────────────────────────────────────
-class SupportTicketReplyInline(admin.StackedInline):
+class SupportTicketReplyInline(StackedInline):
     model = SupportTicketReply
     extra = 0
     fields = ('sender', 'content', 'created_at')
     readonly_fields = ('created_at',)
 
 
-class SupportTicketAdmin(admin.ModelAdmin):
+class SupportTicketAdmin(ModelAdmin):
     inlines = [SupportTicketReplyInline]
     list_display = ('id', 'user', 'subject', 'priority', 'status', 'created_at')
     list_filter = ('priority', 'status')
@@ -246,7 +253,7 @@ class SupportTicketAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at')
 
 
-class SupportTicketReplyAdmin(admin.ModelAdmin):
+class SupportTicketReplyAdmin(ModelAdmin):
     list_display = ('ticket', 'sender', 'created_at')
     search_fields = ('ticket__subject', 'sender__email')
     fields = ('ticket', 'sender', 'content', 'created_at')
@@ -256,7 +263,7 @@ class SupportTicketReplyAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # REPORT
 # ──────────────────────────────────────────────────────────────
-class ReportAdmin(admin.ModelAdmin):
+class ReportAdmin(ModelAdmin):
     list_display = ('id', 'reporter', 'reported_user', 'reason', 'status', 'action_taken', 'created_at')
     list_filter = ('reason', 'status', 'action_taken')
     search_fields = ('reporter__username', 'reported_user__username')
@@ -267,7 +274,7 @@ class ReportAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # BLOCK
 # ──────────────────────────────────────────────────────────────
-class BlockAdmin(admin.ModelAdmin):
+class BlockAdmin(ModelAdmin):
     list_display = ('blocker', 'blocked_user', 'created_at')
     search_fields = ('blocker__username', 'blocked_user__username')
     fields = ('blocker', 'blocked_user', 'created_at')
@@ -277,7 +284,7 @@ class BlockAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # TRANSACTION
 # ──────────────────────────────────────────────────────────────
-class TransactionAdmin(admin.ModelAdmin):
+class TransactionAdmin(ModelAdmin):
     list_display = ('id', 'user', 'plan_name', 'amount', 'status', 'payment_method', 'created_at')
     list_filter = ('status', 'plan_name')
     search_fields = ('user__username', 'plan_name', 'stripe_charge_id')
@@ -288,7 +295,7 @@ class TransactionAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # OTP LOG
 # ──────────────────────────────────────────────────────────────
-class OTPLogAdmin(admin.ModelAdmin):
+class OTPLogAdmin(ModelAdmin):
     list_display = ('email', 'otp', 'action', 'timestamp')
     list_filter = ('action',)
     search_fields = ('email', 'otp')
@@ -299,7 +306,7 @@ class OTPLogAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # SAVED MATCH
 # ──────────────────────────────────────────────────────────────
-class SavedMatchAdmin(admin.ModelAdmin):
+class SavedMatchAdmin(ModelAdmin):
     list_display = ('user', 'target_profile', 'created_at')
     search_fields = ('user__username', 'target_profile__username')
     fields = ('user', 'target_profile', 'created_at')
@@ -309,7 +316,7 @@ class SavedMatchAdmin(admin.ModelAdmin):
 # ──────────────────────────────────────────────────────────────
 # SUBSCRIPTION TIER CONFIGURATION
 # ──────────────────────────────────────────────────────────────
-class SubscriptionTierConfigAdmin(admin.ModelAdmin):
+class SubscriptionTierConfigAdmin(ModelAdmin):
     list_display = (
         'name', 'tier', 'daily_likes_limit', 'daily_personal_messages_limit',
         'daily_community_messages_limit',
@@ -358,6 +365,14 @@ admin.site.register(OTPLog, OTPLogAdmin)
 admin.site.register(SavedMatch, SavedMatchAdmin)
 admin.site.register(SubscriptionTierConfig, SubscriptionTierConfigAdmin)
 
-admin.site.site_header = 'Constela Admin'
-admin.site.site_title = 'Constela'
+
+# Re-register Group with Unfold styling
+admin.site.unregister(Group)
+
+
+@admin.register(Group)
+class GroupAdmin(BaseGroupAdmin, ModelAdmin):
+    pass
+
+
 admin.site.index_title = 'Backend Management'
