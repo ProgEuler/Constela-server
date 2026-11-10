@@ -59,7 +59,19 @@ CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8081',
     'https://mysimon-temperatures-baking-epa.trycloudflare.com',
     'https://*.trycloudflare.com',
+    'https://constela-dating.com',
+    'https://*.constela-dating.com',
 ]
+
+# Extra trusted origins from env (comma-separated, scheme required, e.g. https://api.example.com)
+for _origin in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(','):
+    _origin = _origin.strip().rstrip('/')
+    if _origin and _origin not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(_origin)
+
+# Behind Dokploy/Traefik the TLS terminates at the proxy; trust its forwarded
+# scheme so Django sees requests as HTTPS (needed for CSRF origin checks and secure cookies).
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 _FRONTEND_URL = os.environ.get('FRONTEND_URL')
 if _FRONTEND_URL:
@@ -146,6 +158,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # Must be at the top
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # Serve static files (admin CSS) right after SecurityMiddleware
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -245,6 +258,9 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+# Don't crash if a file is missing from the manifest (e.g. collectstatic not yet run)
+WHITENOISE_MANIFEST_STRICT = False
 
 # Custom User Model
 AUTH_USER_MODEL = 'api.User'
@@ -303,7 +319,7 @@ STORAGES = {
         'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
     },
     'staticfiles': {
-        'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
     },
 }
 MEDIA_URL = '/media/'

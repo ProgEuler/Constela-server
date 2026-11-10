@@ -85,3 +85,6 @@ coverage.xml
 # ========================
 utils_and_misc/
 chat_audio/
+
+# Collected static files
+staticfiles/
