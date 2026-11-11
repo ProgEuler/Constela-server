@@ -60,11 +60,15 @@ class PhotoVerificationTests(TestCase):
         listing = api.get('/api/admin/verifications/')
         self.assertEqual(listing.status_code, 200)
         self.assertEqual(len(listing.data['pending']), 1)
+        row = listing.data['pending'][0]
+        self.assertTrue(row['selfie_url'])
+        self.assertEqual(len(row['profile_photo_urls']), 1)
 
         api.post(url, {'action': 'reject', 'reason': 'Face not visible'}, format='json')
         self.profile.refresh_from_db()
         self.assertEqual(self.profile.face_verification_status, 'rejected')
         self.assertEqual(self.profile.face_verification_note, 'Face not visible')
+        self.assertEqual(api.get('/api/admin/verifications/').data['rejected'][0]['reason'], 'Face not visible')
         self.assertFalse(self.profile.is_verified)
 
         api.post(url, {'action': 'approve'}, format='json')

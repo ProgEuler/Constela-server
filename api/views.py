@@ -2936,25 +2936,33 @@ class AdminVerificationViewSet(APIView):
 
     def get(self, request):
         # Return pending and verified users with selfie and profile photo
-        qs = UserProfile.objects.exclude(Q(face_selfie='') | Q(face_selfie__isnull=True))
-        pending = qs.filter(face_verification_status='pending')
-        verified = qs.filter(face_verification_status='approved')
-        rejected = qs.filter(face_verification_status='rejected')
+        qs = (UserProfile.objects.exclude(Q(face_selfie='') | Q(face_selfie__isnull=True))
+              .select_related('user').prefetch_related('photos'))
+        # Oldest submission first, so the review queue is worked in order.
+        pending = qs.filter(face_verification_status='pending').order_by('face_submitted_at')
+        verified = qs.filter(face_verification_status='approved').order_by('-face_verified_at')
+        rejected = qs.filter(face_verification_status='rejected').order_by('-face_submitted_at')
 
         def format_user(p):
-            profile_photo = p.photos.filter(is_main=True).first()
+            photos = sorted(p.photos.all(), key=lambda ph: (not ph.is_main, ph.uploaded_at))
+            profile_photo = photos[0] if photos else None
             return {
+                # Photo verification: one live photo compared with all profile pictures.
+                "selfie_url": get_cloudinary_url(p.face_selfie) if p.face_selfie else "",
+                "profile_photo_urls": [url for url in (get_cloudinary_url(ph.image) for ph in photos) if url],
+                "reason": p.face_verification_note or "",
                 "id": str(p.id),
                 "name": p.username,
                 "email": p.user.email,
                 "joined_date": p.user.date_joined.strftime('%d %b %Y'),
                 "status": "verified" if p.face_verification_status == 'approved' else ("pending" if p.face_verification_status == 'pending' else "rejected"),
                 "profile_photo_url": get_cloudinary_url(profile_photo.image) if profile_photo else "",
-                "selfie_urls": [
+                # Kept for older dashboard builds.
+                "selfie_urls": [url for url in [
                     get_cloudinary_url(p.face_selfie) if p.face_selfie else "",
                     get_cloudinary_url(p.face_selfie_left) if p.face_selfie_left else "",
                     get_cloudinary_url(p.face_selfie_right) if p.face_selfie_right else "",
-                ],
+                ] if url],
                 "location": f"{p.city}, {p.country}" if p.city and p.country else "Unknown",
                 "submitted_date": (p.face_submitted_at or p.face_verified_at).strftime('%d %b %Y, %H:%M') if (p.face_submitted_at or p.face_verified_at) else "Recently",
             }
