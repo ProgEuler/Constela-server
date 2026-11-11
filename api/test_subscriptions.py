@@ -8,7 +8,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from api.models import ChatRoom, ChatRoomMessage, DirectMessage, Friendship, Match, RevenueCatEvent, SubscriptionTierConfig, SubscriptionUsage, Transaction, User, UserProfile
+from api.models import ChatRoom, ChatRoomMessage, DirectMessage, Friendship, Match, MatchAnalysisPurchase, RevenueCatEvent, SubscriptionTierConfig, SubscriptionUsage, Transaction, User, UserProfile
 from api.subscriptions import access_snapshot, accessible_rooms, consume_usage, effective_access, gift_subscription, payment_history, subscriber_snapshot, sync_subscription, usage_count
 from api.consumers import ChatConsumer
 
@@ -28,6 +28,12 @@ class SubscriptionTests(TestCase):
         self.future = (timezone.now() + timezone.timedelta(days=30)).isoformat()
         self.past = (timezone.now() - timezone.timedelta(seconds=1)).isoformat()
         self.grants = {'premium_plus': {'expires_date': self.future, 'product_identifier': 'premium_plus:monthly', 'store': 'play_store'}}
+        # sync_subscription fetches the raw RevenueCat payload once; tests that mock
+        # subscriber_snapshot don't need a network call for it.
+        self.fetch_patcher = patch('api.subscriptions.fetch_subscriber',
+                                   return_value={'entitlements': {}, 'non_subscriptions': {}})
+        self.fetch_subscriber = self.fetch_patcher.start()
+        self.addCleanup(self.fetch_patcher.stop)
 
     def event(self, **overrides):
         return dict(id='event-1', type='INITIAL_PURCHASE', app_user_id=str(self.profile.id),
@@ -96,7 +102,7 @@ class SubscriptionTests(TestCase):
     def test_transfer_refreshes_both_accounts_without_app_user_id(self, snapshot):
         other_user = User.objects.create_user(username='other', email='other@example.com')
         other = UserProfile.objects.create(user=other_user, username='other')
-        snapshot.side_effect = lambda pk: {} if pk == self.profile.id else self.grants
+        snapshot.side_effect = lambda pk, subscriber=None: {} if pk == self.profile.id else self.grants
         self.profile.revenuecat_entitlements = self.grants
         self.profile.save()
         event = {'id': 'transfer', 'type': 'TRANSFER', 'app_id': 'app_test',
@@ -115,7 +121,8 @@ class SubscriptionTests(TestCase):
         }
         access = effective_access(self.profile)
         self.assertEqual(access['subscription_tier'], 'light')
-        self.assertTrue(access['has_match_analysis'])
+        # Perfect Match Analysis is a one-time purchase now; an old entitlement grants nothing.
+        self.assertFalse(access['has_match_analysis'])
 
     @patch('api.subscriptions.subscriber_snapshot')
     def test_gifts_survive_sync_and_removing_gift_does_not_remove_purchase(self, snapshot):
@@ -134,7 +141,7 @@ class SubscriptionTests(TestCase):
         result = self.client.post('/api/subscription/sync/', {'tier': 'plus', 'profile_id': 'untrusted'})
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.data['subscription_tier'], 'freemium')
-        snapshot.assert_called_once_with(self.profile.id)
+        snapshot.assert_called_once_with(self.profile.id, self.fetch_subscriber.return_value)
 
     @patch('api.subscriptions.subscriber_snapshot')
     def test_sandbox_and_wrong_app_cannot_grant(self, snapshot):
@@ -178,6 +185,66 @@ class SubscriptionTests(TestCase):
         response = self.client.get('/api/matching/perfect-match/?education_level=masters&interests=books')
         self.assertEqual(response.status_code, 200)
 
+    def _analysis_candidate(self, name):
+        user = User.objects.create_user(username=name, email=f'{name}@example.com')
+        return UserProfile.objects.create(user=user, username=name, is_verified=True)
+
+    def _store_purchase(self, txid, sandbox=False):
+        return {'id': txid, 'store_transaction_id': f'GPA.{txid}', 'store': 'play_store',
+                'purchase_date': timezone.now().isoformat(), 'is_sandbox': sandbox}
+
+    @patch('api.subscriptions.subscriber_snapshot', return_value={})
+    def test_match_analysis_is_a_one_time_frozen_snapshot(self, _snapshot):
+        first = self._analysis_candidate('first')
+        second = self._analysis_candidate('second')
+        self.client.force_authenticate(self.user)
+
+        # Nothing bought yet.
+        self.assertEqual(self.client.get('/api/matching/analysis/').status_code, 403)
+
+        # One purchase -> one analysis, computed at purchase time.
+        self.fetch_subscriber.return_value = {'entitlements': {}, 'non_subscriptions': {
+            'perfect_match': [self._store_purchase('one')]}}
+        profile = sync_subscription(self.profile.id)
+        self.assertTrue(profile.has_match_analysis)
+        sync_subscription(self.profile.id)  # re-sync / webhook retry must not double-grant
+        self.assertEqual(MatchAnalysisPurchase.objects.filter(profile=self.profile).count(), 1)
+
+        response = self.client.get('/api/matching/analysis/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual({str(m['id']) for m in response.data['results']}, {str(first.id), str(second.id)})
+        self.assertIsNotNone(response.data['generated_at'])
+
+        # A profile that appears later is NOT added: the results stay as they were at purchase time.
+        newcomer = self._analysis_candidate('newcomer')
+        response = self.client.get('/api/matching/analysis/')
+        self.assertNotIn(str(newcomer.id), {str(m['id']) for m in response.data['results']})
+
+        # Buying again produces a fresh top 5.
+        self.fetch_subscriber.return_value['non_subscriptions']['perfect_match'].append(self._store_purchase('two'))
+        sync_subscription(self.profile.id)
+        self.assertEqual(MatchAnalysisPurchase.objects.filter(profile=self.profile).count(), 2)
+        response = self.client.get('/api/matching/analysis/')
+        self.assertIn(str(newcomer.id), {str(m['id']) for m in response.data['results']})
+
+    @patch('api.subscriptions.subscriber_snapshot', return_value={})
+    def test_match_analysis_ignores_sandbox_purchases(self, _snapshot):
+        self.fetch_subscriber.return_value = {'entitlements': {}, 'non_subscriptions': {
+            'perfect_match': [self._store_purchase('sbx', sandbox=True)]}}
+        profile = sync_subscription(self.profile.id)
+        self.assertFalse(profile.has_match_analysis)
+        self.assertFalse(MatchAnalysisPurchase.objects.filter(profile=self.profile).exists())
+
+    def test_legacy_match_analysis_flag_gets_one_snapshot(self):
+        self._analysis_candidate('legacy-candidate')
+        self.profile.has_match_analysis = True
+        self.profile.save(update_fields=['has_match_analysis'])
+        self.client.force_authenticate(self.user)
+
+        self.assertEqual(self.client.get('/api/matching/analysis/').status_code, 200)
+        self.client.get('/api/matching/analysis/')
+        self.assertEqual(MatchAnalysisPurchase.objects.filter(profile=self.profile).count(), 1)
+
     def test_education_filter_accepts_multiple_levels(self):
         def candidate(name, education):
             user = User.objects.create_user(username=name, email=f'{name}@example.com')
@@ -199,6 +266,7 @@ class SubscriptionTests(TestCase):
 
     @patch('api.subscriptions.requests.get')
     def test_provider_snapshot_checks_environment_grace_and_unknown_entitlements(self, get):
+        self.fetch_patcher.stop()
         get.return_value = Mock(**{'json.return_value': {'subscriber': {
             'entitlements': {'premium_light': {'product_identifier': 'light', 'expires_date': self.past},
                              'unknown': {'product_identifier': 'unknown', 'expires_date': None}},
@@ -315,6 +383,7 @@ class SubscriptionTests(TestCase):
 
     @patch('api.subscriptions.requests.get')
     def test_sync_rejects_provider_customer_owned_by_another_account(self, get):
+        self.fetch_patcher.stop()
         other_user = User.objects.create_user(username='owner', email='owner@example.com')
         other = UserProfile.objects.create(user=other_user, username='owner')
         get.return_value = Mock(**{'json.return_value': {'subscriber': {

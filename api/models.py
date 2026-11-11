@@ -624,3 +624,29 @@ class SubscriptionTierConfig(models.Model):
         except Exception:
             pass
         super().delete(*args, **kwargs)
+
+
+class MatchAnalysisPurchase(models.Model):
+    """One Perfect Match Analysis purchase = one frozen top-5 snapshot.
+
+    The analysis is a one-time (consumable) purchase, not a subscription: the
+    top 5 is computed when the purchase is recorded and kept as-is. A new
+    analysis later requires a new purchase.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    profile = models.ForeignKey(UserProfile, on_delete=models.CASCADE, related_name='match_analyses')
+    # Store transaction identity; unique so webhook retries / re-syncs never double-grant.
+    transaction_key = models.CharField(max_length=255, unique=True)
+    product_id = models.CharField(max_length=100, blank=True, default='')
+    store = models.CharField(max_length=50, blank=True, default='')
+    purchased_at = models.DateTimeField()
+    # [{"id": "<profile uuid>", "compatibility_score": 87}, ...] — names/photos are loaded fresh on read.
+    results = models.JSONField(null=True, blank=True)
+    generated_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-purchased_at']
+
+    def __str__(self):
+        return f"Match analysis for {self.profile.username} ({self.purchased_at:%Y-%m-%d})"

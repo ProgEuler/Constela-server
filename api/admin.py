@@ -9,8 +9,43 @@ from api.models import (
     User, UserProfile, UserPhoto, Match, Friendship,
     DirectMessage, ChatRoom, ChatRoomMessage, SupportTicket,
     SupportTicketReply, Report, Block, Transaction, OTPLog, SavedMatch,
-    SubscriptionTierConfig
+    SubscriptionTierConfig, MatchAnalysisPurchase
 )
+
+
+# ──────────────────────────────────────────────────────────────
+# IMAGE HELPERS (same URL logic the app API uses)
+# ──────────────────────────────────────────────────────────────
+def media_url(image_field):
+    """Resolve a stored image exactly like the API does: full URLs as-is,
+    R2 presigned URLs, or the Cloudinary CDN fallback for legacy files."""
+    if not image_field:
+        return ''
+    try:
+        from api.views import get_cloudinary_url
+        return get_cloudinary_url(image_field) or ''
+    except Exception:
+        return ''
+
+
+def image_tag(image_field, height=80, round_=False):
+    url = media_url(image_field)
+    if not url:
+        return '—'
+    if round_:
+        return format_html(
+            '<img src="{}" style="width:{}px;height:{}px;border-radius:50%;object-fit:cover;" />',
+            url, height, height,
+        )
+    return format_html('<img src="{}" style="height:{}px;border-radius:8px;object-fit:cover;" />', url, height)
+
+
+def main_photo_of(profile):
+    if profile is None:
+        return None
+    photos = list(profile.photos.all())
+    photo = next((p for p in photos if p.is_main), photos[0] if photos else None)
+    return photo.image if photo else None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -21,7 +56,16 @@ class CustomUserAdmin(UserAdmin, ModelAdmin):
     form = UserChangeForm
     add_form = UserCreationForm
     change_password_form = AdminPasswordChangeForm
-    list_display = ('email', 'username', 'role', 'is_verified', 'is_active', 'date_joined')
+    list_display = ('avatar', 'email', 'username', 'role', 'is_verified', 'is_active', 'date_joined')
+    list_display_links = ('avatar', 'email')
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('profile').prefetch_related('profile__photos')
+
+    def avatar(self, obj):
+        profile = getattr(obj, 'profile', None)
+        return image_tag(main_photo_of(profile), height=36, round_=True)
+    avatar.short_description = 'Photo'
     list_filter = ('role', 'is_verified', 'is_staff', 'is_active')
     search_fields = ('email', 'username')
     ordering = ('-date_joined',)
@@ -49,17 +93,7 @@ class UserPhotoInline(TabularInline):
     readonly_fields = ('image_preview', 'uploaded_at')
 
     def image_preview(self, obj):
-        if obj.image:
-            try:
-                url = obj.image.url
-                if not (url.startswith('http://') or url.startswith('https://')):
-                    import cloudinary.utils
-                    url, _ = cloudinary.utils.cloudinary_url(obj.image.name, secure=True)
-            except Exception:
-                url = ''
-            if url:
-                return format_html('<img src="{}" style="height:60px;border-radius:6px;" />', url)
-        return '—'
+        return image_tag(obj.image, height=60)
     image_preview.short_description = 'Preview'
 
 
@@ -68,23 +102,22 @@ class UserPhotoInline(TabularInline):
 # ──────────────────────────────────────────────────────────────
 class UserProfileAdmin(ModelAdmin):
     inlines = [UserPhotoInline]
-    list_display = ('username', 'user_email', 'gender', 'age', 'city', 'country',
+    list_display = ('avatar', 'username', 'user_email', 'gender', 'age', 'city', 'country',
                     'subscription_tier', 'subscription_product_id', 'is_verified', 'profile_completion_pct')
     readonly_fields = ('face_selfie_preview', 'face_selfie_left_preview', 'face_selfie_right_preview',
                        'subscription_product_id', 'subscription_store')
 
+    list_display_links = ('avatar', 'username')
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('user').prefetch_related('photos')
+
+    def avatar(self, obj):
+        return image_tag(main_photo_of(obj), height=36, round_=True)
+    avatar.short_description = 'Photo'
+
     def get_cloudinary_preview(self, img_field):
-        if img_field:
-            try:
-                url = img_field.url
-                if not (url.startswith('http://') or url.startswith('https://')):
-                    import cloudinary.utils
-                    url, _ = cloudinary.utils.cloudinary_url(img_field.name, secure=True)
-            except Exception:
-                url = ''
-            if url:
-                return format_html('<img src="{}" style="height:150px;border-radius:8px;object-fit:cover;" />', url)
-        return '—'
+        return image_tag(img_field, height=150)
 
     def face_selfie_preview(self, obj):
         return self.get_cloudinary_preview(obj.face_selfie)
@@ -153,17 +186,7 @@ class UserPhotoAdmin(ModelAdmin):
     fields = ('profile', 'image', 'image_preview', 'is_main', 'is_verified', 'uploaded_at')
 
     def image_preview(self, obj):
-        if obj.image:
-            try:
-                url = obj.image.url
-                if not (url.startswith('http://') or url.startswith('https://')):
-                    import cloudinary.utils
-                    url, _ = cloudinary.utils.cloudinary_url(obj.image.name, secure=True)
-            except Exception:
-                url = ''
-            if url:
-                return format_html('<img src="{}" style="height:80px;border-radius:8px;" />', url)
-        return '—'
+        return image_tag(obj.image, height=80)
     image_preview.short_description = 'Preview'
 
 
@@ -346,6 +369,29 @@ class SubscriptionTierConfigAdmin(ModelAdmin):
 
 
 # ──────────────────────────────────────────────────────────────
+# PERFECT MATCH ANALYSIS (one-time purchases)
+# ──────────────────────────────────────────────────────────────
+class MatchAnalysisPurchaseAdmin(ModelAdmin):
+    list_display = ('profile', 'store', 'product_id', 'purchased_at', 'generated_at', 'result_count')
+    list_filter = ('store', 'product_id')
+    search_fields = ('profile__username', 'profile__user__email', 'transaction_key')
+    readonly_fields = ('generated_at', 'results', 'created_at')
+    autocomplete_fields = ('profile',)
+    ordering = ('-purchased_at',)
+
+    def result_count(self, obj):
+        return len(obj.results or [])
+    result_count.short_description = 'Matches'
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        # A manually granted analysis gets its top 5 computed right away.
+        if obj.generated_at is None:
+            from api.match_analysis import generate_snapshot
+            generate_snapshot(obj)
+
+
+# ──────────────────────────────────────────────────────────────
 # REGISTRATIONS
 # ──────────────────────────────────────────────────────────────
 admin.site.register(User, CustomUserAdmin)
@@ -364,6 +410,7 @@ admin.site.register(Transaction, TransactionAdmin)
 admin.site.register(OTPLog, OTPLogAdmin)
 admin.site.register(SavedMatch, SavedMatchAdmin)
 admin.site.register(SubscriptionTierConfig, SubscriptionTierConfigAdmin)
+admin.site.register(MatchAnalysisPurchase, MatchAnalysisPurchaseAdmin)
 
 
 # Re-register Group with Unfold styling

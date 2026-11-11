@@ -338,6 +338,7 @@ UNFOLD = {
                 'items': [
                     _admin_link('Transactions', 'receipt_long', 'api_transaction'),
                     _admin_link('Subscription Tiers', 'workspace_premium', 'api_subscriptiontierconfig'),
+                    _admin_link('Match Analyses', 'insights', 'api_matchanalysispurchase'),
                 ],
             },
         ],
@@ -422,3 +423,9 @@ REVENUECAT_API_KEY = os.environ.get('REVENUECAT_API_KEY', '')
 REVENUECAT_SIGNING_SECRET = os.environ.get('REVENUECAT_SIGNING_SECRET', '')
 REVENUECAT_ALLOW_SANDBOX = os.environ.get('REVENUECAT_ALLOW_SANDBOX', 'false').lower() == 'true'
 REVENUECAT_APP_IDS = [value.strip() for value in os.environ.get('REVENUECAT_APP_IDS', '').split(',') if value.strip()]
+# Store product IDs of the one-time Perfect Match Analysis purchase (consumable).
+MATCH_ANALYSIS_PRODUCT_IDS = [
+    value.strip()
+    for value in os.environ.get('MATCH_ANALYSIS_PRODUCT_IDS', 'perfect_match').split(',')
+    if value.strip()
+]

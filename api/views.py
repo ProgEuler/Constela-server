@@ -1176,79 +1176,29 @@ class PerfectMatchView(APIView):
 class MatchAnalysisView(APIView):
     """
     GET /api/matching/analysis/
-    Returns the top 5 highest-scored matches for the user.
-    Requires Perfect Match Analysis add-on.
+    Returns the user's latest Perfect Match Analysis: the top 5 frozen at the
+    time of purchase. Each analysis is a one-time purchase; a fresh top 5
+    requires buying again.
     """
     def get(self, request):
+        from api.match_analysis import latest_analysis, serialize_analysis
+
         me = get_object_or_404(UserProfile, user=request.user)
-        
-        if not me.subscription_access['has_match_analysis']:
+        with transaction.atomic():
+            me = UserProfile.objects.select_for_update().get(id=me.id)
+            analysis = latest_analysis(me)
+
+        if analysis is None:
             return Response(
-                {"error": "You need the Perfect Match Analysis add-on to access this feature."},
+                {"error": "Purchase a Perfect Match Analysis to see your top 5 matches."},
                 status=status.HTTP_403_FORBIDDEN
             )
-            
-        # Get list of blocked users and friends to exclude
-        blocked_by_me = Block.objects.filter(blocker=me).values_list('blocked_user', flat=True)
-        blocked_me = Block.objects.filter(blocked_user=me).values_list('blocker', flat=True)
-        friends_sent = Friendship.objects.filter(sender=me).values_list('receiver', flat=True)
-        friends_received = Friendship.objects.filter(receiver=me).values_list('sender', flat=True)
-        
-        base_exclude = set(blocked_by_me).union(set(blocked_me)).union(set(friends_sent)).union(set(friends_received))
-        base_exclude.add(me.id)
-        
-        # Exclude users already swiped
-        swiped_users = Match.objects.filter(user1=me).values_list('user2', flat=True)
-        exclude_users = base_exclude.union(set(swiped_users))
-        
-        # Filter potential matches
-        candidates = UserProfile.objects.filter(
-            is_deactivated=False,
-            is_verified=True,
-            user__role='member',
-            user__is_staff=False,
-            user__is_superuser=False
-        ).exclude(id__in=exclude_users).select_related('user').prefetch_related('photos')
 
-        # Filter by opposite gender based on user's profile
-        if me.gender.lower() == 'man':
-            candidates = candidates.filter(gender__iexact='woman')
-        elif me.gender.lower() == 'woman':
-            candidates = candidates.filter(gender__iexact='man')
-        
-        matches = []
-        for candidate in candidates:
-            comp_score = calculate_compatibility(me, candidate)
-            
-            # Fetch photo URL
-            photo_url = None
-            if candidate.photos.exists():
-                main_photo = get_main_photo(candidate)
-                photo_url = request.build_absolute_uri(main_photo.image.url)
+        def photo_for(candidate, req):
+            main_photo = get_main_photo(candidate) if candidate.photos.exists() else None
+            return req.build_absolute_uri(main_photo.image.url) if main_photo else None
 
-            # Build tags
-            qualities_display = candidate.qualities if candidate.qualities else []
-            interests_list = candidate.interests if candidate.interests else []
-
-            matches.append({
-                "id": candidate.id,
-                "name": candidate.display_name,
-                "age": candidate.age,
-                "gender": candidate.gender,
-                "city": candidate.city,
-                "country": candidate.country,
-                "tags": qualities_display + interests_list,
-                "photo": photo_url,
-                "compatibility_score": comp_score
-            })
-            
-        # Sort strictly by score, descending
-        matches = sorted(matches, key=lambda x: x['compatibility_score'], reverse=True)
-        
-        # Take exactly top 5
-        top_matches = matches[:5]
-        
-        return Response({"results": top_matches}, status=status.HTTP_200_OK)
+        return Response(serialize_analysis(analysis, request, photo_for), status=status.HTTP_200_OK)
 
 
 def notify_threads_changed(profile_ids, thread_type):

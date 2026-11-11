@@ -12,8 +12,9 @@ from django.utils.dateparse import parse_datetime
 
 from api.models import ChatRoom, ChatRoomMessage, DirectMessage, Match, SubscriptionUsage, Transaction, UserProfile
 
+# Perfect Match Analysis is a one-time purchase (see api/match_analysis.py), not an entitlement.
 ENTITLEMENTS = {
-    'premium_light', 'premium_plus', 'add_on_match_analysis',
+    'premium_light', 'premium_plus',
 }
 DEFAULT_TIER_CONFIGS = {
     'freemium': {
@@ -150,6 +151,13 @@ def quota_snapshot(profile, kind):
     }
 
 
+def _last_match_analysis_at(profile):
+    from api.models import MatchAnalysisPurchase
+    last = (MatchAnalysisPurchase.objects.filter(profile=profile, generated_at__isnull=False)
+            .order_by('-generated_at').values_list('generated_at', flat=True).first())
+    return last.isoformat() if last else None
+
+
 def access_snapshot(profile):
     access = effective_access(profile)
     tier = access['subscription_tier']
@@ -162,6 +170,7 @@ def access_snapshot(profile):
         'can_see_likes': config.get('can_see_likes', tier != 'freemium'),
         'can_undo_swipes': config.get('can_undo_swipes', tier != 'freemium'),
         'has_match_analysis': access['has_match_analysis'],
+        'match_analysis_last_at': _last_match_analysis_at(profile),
         'quotas': {
             'likes': quota_snapshot(profile, 'likes'),
             'personal_messages': quota_snapshot(profile, 'personal_messages'),
@@ -217,7 +226,7 @@ def effective_access(profile):
         result = dict(subscription_tier=tier,
                       subscription_expires=parse_datetime(grant['expires_date']) if grant.get('expires_date') else None,
                       subscription_product_id=grant.get('product_identifier'), subscription_store=grant.get('store'),
-                      has_match_analysis='add_on_match_analysis' in live)
+                      has_match_analysis=profile.has_match_analysis)
     gift = profile.subscription_gift
     if active(gift) and {'freemium': 0, 'light': 1, 'plus': 2}[gift['tier']] > {'freemium': 0, 'light': 1, 'plus': 2}[result['subscription_tier']]:
         result.update(subscription_tier=gift['tier'], subscription_expires=parse_datetime(gift['expires_date']),
@@ -251,7 +260,7 @@ def profile_ids(candidates):
     return list(UserProfile.objects.filter(id__in=ids).order_by('id').values_list('id', flat=True))
 
 
-def subscriber_snapshot(profile_id):
+def fetch_subscriber(profile_id):
     key = settings.REVENUECAT_API_KEY
     if not key:
         raise RuntimeError('RevenueCat server API key is not configured')
@@ -264,6 +273,12 @@ def subscriber_snapshot(profile_id):
     original_profiles = profile_ids([subscriber.get('original_app_user_id')])
     if original_profiles and str(original_profiles[0]) != str(profile_id):
         raise ValueError('RevenueCat customer is owned by another known account; resolve aliases before granting access')
+    return subscriber
+
+
+def subscriber_snapshot(profile_id, subscriber=None):
+    if subscriber is None:
+        subscriber = fetch_subscriber(profile_id)
     entitlements = subscriber['entitlements']
     if not isinstance(entitlements, dict):
         raise ValueError('Invalid RevenueCat entitlement response')
@@ -293,11 +308,17 @@ def subscriber_snapshot(profile_id):
 def sync_subscription(profile_id):
     # Serialize refreshes per customer so an older in-flight response cannot win.
     profile = UserProfile.objects.select_for_update().get(id=profile_id)
-    grants = subscriber_snapshot(profile.id)
+    subscriber = fetch_subscriber(profile.id)
+    grants = subscriber_snapshot(profile.id, subscriber)
     if profile.revenuecat_entitlements is None and not profile.subscription_store and profile.subscription_tier != 'freemium' and profile.subscription_expires:
         profile.subscription_gift = {'tier': profile.subscription_tier, 'expires_date': profile.subscription_expires.isoformat()}
     profile.revenuecat_entitlements = grants
     profile.subscription_synced_at = timezone.now()
+    # One-time Perfect Match Analysis purchases: each new one gets a frozen top 5.
+    from api.match_analysis import import_store_purchases
+    from api.models import MatchAnalysisPurchase
+    import_store_purchases(profile, subscriber)
+    profile.has_match_analysis = profile.has_match_analysis or MatchAnalysisPurchase.objects.filter(profile=profile).exists()
     for key, value in effective_access(profile).items():
         setattr(profile, key, value)
     profile.save(update_fields=['revenuecat_entitlements', 'subscription_synced_at', 'subscription_gift',
