@@ -936,8 +936,9 @@ class PerfectMatchView(APIView):
                         mapped_edu.append('bachelor')
                     elif edu in ['phd', 'doctorate']:
                         mapped_edu.append('phd')
-                    elif edu in ['below bachelor', 'below']:
-                        mapped_edu.append('below')
+                    elif edu in ['below bachelor', 'below', 'before bachelor', 'high school']:
+                        # Profiles store "High School" for this level (onboarding option).
+                        mapped_edu.extend(['high school', 'below', 'before bachelor'])
                     else:
                         mapped_edu.append(edu)
                 # Filter if education_level matches any of these mapped values

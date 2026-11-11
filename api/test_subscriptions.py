@@ -178,6 +178,25 @@ class SubscriptionTests(TestCase):
         response = self.client.get('/api/matching/perfect-match/?education_level=masters&interests=books')
         self.assertEqual(response.status_code, 200)
 
+    def test_education_filter_accepts_multiple_levels(self):
+        def candidate(name, education):
+            user = User.objects.create_user(username=name, email=f'{name}@example.com')
+            return UserProfile.objects.create(user=user, username=name, is_verified=True, education_level=education)
+
+        high_school = candidate('hs', 'High School')
+        masters = candidate('ms', "Master's")
+        phd = candidate('doc', 'PhD')
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get('/api/matching/perfect-match/?education_level=Masters,Before Bachelor')
+
+        self.assertEqual(response.status_code, 200)
+        results = response.data.get('results', response.data) if isinstance(response.data, dict) else response.data
+        ids = {str(p['id']) for p in results}
+        self.assertIn(str(high_school.id), ids)
+        self.assertIn(str(masters.id), ids)
+        self.assertNotIn(str(phd.id), ids)
+
     @patch('api.subscriptions.requests.get')
     def test_provider_snapshot_checks_environment_grace_and_unknown_entitlements(self, get):
         get.return_value = Mock(**{'json.return_value': {'subscriber': {
