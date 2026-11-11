@@ -332,6 +332,7 @@ UNFOLD = {
                     _admin_link('Support Tickets', 'support_agent', 'api_supportticket'),
                     _admin_link('Ticket Replies', 'reply', 'api_supportticketreply'),
                     _admin_link('OTP Logs', 'password', 'api_otplog'),
+                    _admin_link('Push Devices', 'phonelink_ring', 'api_pushdevice'),
                 ],
             },
             {

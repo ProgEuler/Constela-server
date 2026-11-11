@@ -37,11 +37,12 @@ def decide(profile, approved, note=''):
 def _notify(profile, approved, note):
     try:
         from api.push_notifications import send_push_notification_to_user
+        from api.push_notifications import push_text
         if approved:
-            title, body = 'Photo verified ✅', 'Your photo verification was approved.'
+            title, body = push_text(profile, 'verify_ok_title'), push_text(profile, 'verify_ok_body')
         else:
-            title = 'Photo verification declined'
-            body = note or 'Your verification photo could not be approved. Please take a new one.'
+            title = push_text(profile, 'verify_no_title')
+            body = note or push_text(profile, 'verify_no_body')
         send_push_notification_to_user(profile.user, title, body, {'type': 'photo_verification',
                                                                    'status': profile.face_verification_status})
     except Exception:

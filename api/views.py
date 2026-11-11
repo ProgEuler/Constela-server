@@ -36,7 +36,7 @@ from api.serializers import (
 from api.subscriptions import access_snapshot, accessible_rooms, consume_usage, payment_history, quota_snapshot
 from api.permissions import IsMember, IsSupportAgent, IsModerator, IsAdminUser, IsSuperAdmin
 from api.matching_engine import calculate_compatibility
-from api.push_notifications import notify_direct_message, send_push_notification_to_user
+from api.push_notifications import notify_direct_message, push_text, send_push_notification_to_user
 from api.chat_media import (
     audio_storage_key,
     image_storage_key,
@@ -1299,8 +1299,8 @@ class MatchActionView(APIView):
                     if getattr(target, 'likes_push', True):
                         send_push_notification_to_user(
                             user=target.user,
-                            title="It's a Match! 🎉",
-                            body=f"You and {me.display_name} have liked each other.",
+                            title=push_text(target, 'match_title'),
+                            body=push_text(target, 'match_body', name=me.display_name),
                             data={
                                 "type": "match",
                                 "profile_id": str(me.id),
@@ -1312,8 +1312,8 @@ class MatchActionView(APIView):
                     if getattr(me, 'likes_push', True):
                         send_push_notification_to_user(
                             user=me.user,
-                            title="It's a Match! 🎉",
-                            body=f"You and {target.display_name} have liked each other.",
+                            title=push_text(me, 'match_title'),
+                            body=push_text(me, 'match_body', name=target.display_name),
                             data={
                                 "type": "match",
                                 "profile_id": str(target.id),
@@ -1321,6 +1321,17 @@ class MatchActionView(APIView):
                             }
                         )
                 
+        # Someone liked you (not a match yet): anonymous, so "see who liked you" stays a premium perk.
+        if (action_type in ['liked', 'superliked'] and not is_mutual and not already_liked
+                and getattr(target, 'likes_push', True)):
+            kind = 'superlike' if action_type == 'superliked' else 'like'
+            send_push_notification_to_user(
+                user=target.user,
+                title=push_text(target, f'{kind}_title'),
+                body=push_text(target, f'{kind}_body'),
+                data={"type": kind},
+            )
+
         return Response({
             "status": match_obj.status,
             "is_mutual_match": is_mutual,
@@ -1773,6 +1784,19 @@ class FriendshipViewSet(viewsets.ModelViewSet):
                 reverse_friendship.status = 'accepted'
                 reverse_friendship.save()
                 notify_threads_changed([me.id, target.id], 'friends')
+                # They had asked first; tell them it's now accepted.
+                if getattr(target, 'messages_push', True):
+                    me_photo = get_main_photo(me)
+                    send_push_notification_to_user(
+                        user=target.user,
+                        title=push_text(target, 'friend_accepted_title'),
+                        body=push_text(target, 'friend_accepted_body', name=me.display_name),
+                        data={
+                            "type": "friend_request_accepted",
+                            "profile_id": str(me.id),
+                            "sender_photo": get_cloudinary_url(me_photo.image) if me_photo else None
+                        }
+                    )
                 return Response({"message": "Friend request accepted."}, status=status.HTTP_200_OK)
 
         friendship, created = Friendship.objects.get_or_create(sender=me, receiver=target, defaults={'status': 'pending'})
@@ -1784,8 +1808,8 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             me_photo = get_main_photo(me)
             send_push_notification_to_user(
                 user=target.user,
-                title="New Friend Request",
-                body=f"{me.username} sent you a friend request!",
+                title=push_text(target, 'friend_request_title'),
+                body=push_text(target, 'friend_request_body', name=me.display_name),
                 data={
                     "type": "friend_request_received",
                     "profile_id": str(me.id),
@@ -1808,8 +1832,8 @@ class FriendshipViewSet(viewsets.ModelViewSet):
             receiver_photo = get_main_photo(friendship.receiver)
             send_push_notification_to_user(
                 user=friendship.sender.user,
-                title="Friend Request Accepted",
-                body=f"{friendship.receiver.display_name} accepted your friend request!",
+                title=push_text(friendship.sender, 'friend_accepted_title'),
+                body=push_text(friendship.sender, 'friend_accepted_body', name=friendship.receiver.display_name),
                 data={
                     "type": "friend_request_accepted",
                     "profile_id": str(friendship.receiver.id),

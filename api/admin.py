@@ -9,7 +9,7 @@ from api.models import (
     User, UserProfile, UserPhoto, Match, Friendship,
     DirectMessage, ChatRoom, ChatRoomMessage, SupportTicket,
     SupportTicketReply, Report, Block, Transaction, OTPLog, SavedMatch,
-    SubscriptionTierConfig, MatchAnalysisPurchase, PhotoVerification
+    SubscriptionTierConfig, MatchAnalysisPurchase, PhotoVerification, PushDevice
 )
 from django import forms
 from django.contrib import messages
@@ -106,8 +106,21 @@ class UserPhotoInline(TabularInline):
 # ──────────────────────────────────────────────────────────────
 # USER PROFILE
 # ──────────────────────────────────────────────────────────────
+class PushDeviceInline(TabularInline):
+    model = PushDevice
+    extra = 0
+    can_delete = True
+    fields = ('platform', 'token', 'updated_at')
+    readonly_fields = ('platform', 'token', 'updated_at')
+    verbose_name = 'Push device'
+    verbose_name_plural = 'Push devices (phones registered for notifications)'
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
 class UserProfileAdmin(ModelAdmin):
-    inlines = [UserPhotoInline]
+    inlines = [UserPhotoInline, PushDeviceInline]
     list_display = ('avatar', 'username', 'user_email', 'gender', 'age', 'city', 'country',
                     'subscription_tier', 'subscription_product_id', 'is_verified', 'profile_completion_pct')
     readonly_fields = ('face_selfie_preview', 'face_selfie_left_preview', 'face_selfie_right_preview',
@@ -544,6 +557,69 @@ class PhotoVerificationAdmin(ModelAdmin):
 
 
 # ──────────────────────────────────────────────────────────────
+# PUSH DEVICES (FCM tokens registered by the app)
+# ──────────────────────────────────────────────────────────────
+class PushDeviceAdmin(ModelAdmin):
+    list_display = ('profile', 'user_email', 'platform_badge', 'short_token', 'updated_at')
+    list_filter = ('platform',)
+    search_fields = ('profile__username', 'profile__user__email', 'token')
+    ordering = ('-updated_at',)
+    readonly_fields = ('profile', 'token', 'platform', 'updated_at')
+    fields = ('profile', 'platform', 'token', 'updated_at')
+    actions = ['send_test_push']
+    actions_row = ['send_test_push_row']
+    list_per_page = 50
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('profile__user')
+
+    def has_add_permission(self, request):
+        # Tokens come from the app only; deleting one is allowed (e.g. a stale phone).
+        return False
+
+    def user_email(self, obj):
+        return obj.profile.user.email
+    user_email.short_description = 'Email'
+
+    @display(description='Platform', label={'android': 'success', 'ios': 'info'})
+    def platform_badge(self, obj):
+        return obj.platform or 'unknown'
+
+    def short_token(self, obj):
+        return f"{obj.token[:18]}…{obj.token[-6:]}" if len(obj.token) > 30 else obj.token
+    short_token.short_description = 'Token'
+
+    def _send_test(self, request, tokens):
+        from api.push_notifications import send_fcm_push
+        result = send_fcm_push(
+            tokens,
+            title='Constela test notification 🔔',
+            body='If you can see this, push notifications are working on this device.',
+            data={'type': 'test'},
+        )
+        if result.get('status') != 'completed':
+            messages.error(request, f"Test push not sent: {result.get('message')}")
+        elif result.get('failures'):
+            messages.warning(
+                request,
+                f"Delivered to {result['success']} device(s), failed for {result['failures']}. "
+                "Failed tokens that FCM reports as dead are removed automatically; see the server log for details.",
+            )
+        else:
+            messages.success(request, f"Test push delivered to {result['success']} device(s).")
+
+    @admin.action(description='Send test push to selected devices')
+    def send_test_push(self, request, queryset):
+        self._send_test(request, list(queryset.values_list('token', flat=True)))
+
+    @action(description='Send test push', icon='notifications_active')
+    def send_test_push_row(self, request, object_id):
+        device = PushDevice.objects.get(pk=object_id)
+        self._send_test(request, [device.token])
+        return redirect(request.headers.get('referer') or reverse('admin:api_pushdevice_changelist'))
+
+
+# ──────────────────────────────────────────────────────────────
 # REGISTRATIONS
 # ──────────────────────────────────────────────────────────────
 admin.site.register(User, CustomUserAdmin)
@@ -564,6 +640,7 @@ admin.site.register(SavedMatch, SavedMatchAdmin)
 admin.site.register(SubscriptionTierConfig, SubscriptionTierConfigAdmin)
 admin.site.register(MatchAnalysisPurchase, MatchAnalysisPurchaseAdmin)
 admin.site.register(PhotoVerification, PhotoVerificationAdmin)
+admin.site.register(PushDevice, PushDeviceAdmin)
 
 
 # Re-register Group with Unfold styling

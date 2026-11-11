@@ -168,11 +168,11 @@ def notify_direct_message(message) -> None:
     if message.content:
         body = message.content if len(message.content) <= 120 else message.content[:117] + '...'
     elif message.image_url:
-        body = '📷 Photo'
+        body = push_text(receiver, 'msg_photo')
     elif message.audio_url:
-        body = '🎤 Voice message'
+        body = push_text(receiver, 'msg_voice')
     else:
-        body = 'New message'
+        body = push_text(receiver, 'msg_new')
 
     try:
         queue_push_to_profile(
@@ -187,3 +187,32 @@ def notify_direct_message(message) -> None:
         )
     except Exception as e:
         logger.error(f"Error sending message push for {message.id}: {e}")
+
+
+# ── Localised push texts (recipient's preferred_language; English fallback) ──
+PUSH_TEXTS = {
+    "match_title": {"en": "It's a Match! 🎉", "fr": "C'est un match ! 🎉"},
+    "match_body": {"en": "You and {name} have liked each other.", "fr": "{name} et vous vous êtes plu mutuellement."},
+    "like_title": {"en": "Someone liked you 💜", "fr": "Quelqu'un vous a liké 💜"},
+    "like_body": {"en": "Open Constela to see who it is.", "fr": "Ouvrez Constela pour découvrir qui c'est."},
+    "superlike_title": {"en": "You got a Super Like ⭐", "fr": "Vous avez reçu un Super Like ⭐"},
+    "superlike_body": {"en": "Someone really wants to meet you.", "fr": "Quelqu'un a très envie de vous rencontrer."},
+    "friend_request_title": {"en": "New Friend Request", "fr": "Nouvelle demande d'ami"},
+    "friend_request_body": {"en": "{name} sent you a friend request!", "fr": "{name} vous a envoyé une demande d'ami !"},
+    "friend_accepted_title": {"en": "Friend Request Accepted", "fr": "Demande d'ami acceptée"},
+    "friend_accepted_body": {"en": "{name} accepted your friend request!", "fr": "{name} a accepté votre demande d'ami !"},
+    "verify_ok_title": {"en": "Photo verified ✅", "fr": "Photo vérifiée ✅"},
+    "verify_ok_body": {"en": "Your photo verification was approved.", "fr": "Votre vérification photo a été approuvée."},
+    "verify_no_title": {"en": "Photo verification declined", "fr": "Vérification photo refusée"},
+    "verify_no_body": {"en": "Your verification photo could not be approved. Please take a new one.",
+                       "fr": "Votre photo de vérification n'a pas pu être approuvée. Veuillez en prendre une nouvelle."},
+    "msg_photo": {"en": "📷 Photo", "fr": "📷 Photo"},
+    "msg_voice": {"en": "🎤 Voice message", "fr": "🎤 Message vocal"},
+    "msg_new": {"en": "New message", "fr": "Nouveau message"},
+}
+
+
+def push_text(profile, key: str, **kwargs) -> str:
+    lang = (getattr(profile, "preferred_language", "") or "en")[:2].lower()
+    texts = PUSH_TEXTS[key]
+    return texts.get(lang, texts["en"]).format(**kwargs)
