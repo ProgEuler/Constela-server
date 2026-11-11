@@ -467,7 +467,9 @@ class Transaction(models.Model):
         ('disputed', 'Disputed'),
         ('refunded', 'Refunded'),
     )
-    user = models.ForeignKey(UserProfile, on_delete=models.CASCADE, related_name='transactions')
+    # SET_NULL: deleting an account keeps an anonymous payment record, which the
+    # privacy policy promises for statutory accounting / tax retention.
+    user = models.ForeignKey(UserProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
     plan_name = models.CharField(max_length=100)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES)
@@ -483,7 +485,8 @@ class Transaction(models.Model):
         ]
 
     def __str__(self):
-        return f"TX #{self.id}: {self.plan_name} ({self.status}) for {self.user.username}"
+        owner = self.user.username if self.user else "deleted account"
+        return f"TX #{self.id}: {self.plan_name} ({self.status}) for {owner}"
 
 
 class RevenueCatEvent(models.Model):

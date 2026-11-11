@@ -19,6 +19,10 @@ from api.chat_media import (
 )
 
 
+
+MIN_AGE = 18
+MAX_AGE = 120
+
 class ChahiraTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
     Custom JWT login serializer that injects the user's role and serialized profile into the response.
@@ -235,6 +239,14 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'preferred_language', 'is_deactivated', 'photos', 'connection_status', 'name'
         )
         read_only_fields = ('id', 'user', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'face_verification_note', 'must_verify_face', 'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'photos', 'connection_status', 'name')
+
+    def validate_age(self, value):
+        # Constela is for adults only (Terms §2, Google Play dating-app policy).
+        if value is not None and value < MIN_AGE:
+            raise serializers.ValidationError(f"You must be at least {MIN_AGE} years old to use Constela.")
+        if value is not None and value > MAX_AGE:
+            raise serializers.ValidationError("Please enter a valid age.")
+        return value
 
     def get_name(self, obj):
         return obj.display_name

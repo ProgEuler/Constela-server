@@ -7,6 +7,9 @@ class ApiConfig(AppConfig):
     name = 'api'
 
     def ready(self):
+        # File clean-up on delete (photos, verification photos, chat media).
+        from api import signals  # noqa: F401
+
         # Only run background tasks if we are running the web server
         if 'runserver' not in sys.argv:
             return

@@ -3132,7 +3132,7 @@ class AdminDashboardActivityView(APIView):
                 "type": "subscription_purchased",
                 "title": "Premium subscription purchased",
                 "timestamp": tx.created_at.isoformat(),
-                "details": f"{tx.user.username} purchased {tx.plan_name}"
+                "details": f"{tx.user.username if tx.user else 'Deleted account'} purchased {tx.plan_name}"
             })
 
         # 5. Reports submitted
@@ -3405,11 +3405,12 @@ class AdminSubscriptionsDashboardView(APIView):
 
             serialized_subs.append({
                 "id": tx.id,
+                # Accounts that were deleted keep anonymous payment records (legal retention).
                 "user": {
                     "id": tx.user.id,
                     "username": tx.user.username,
                     "email": tx.user.user.email
-                },
+                } if tx.user else {"id": None, "username": "Deleted account", "email": ""},
                 "plan_name": tx.plan_name,
                 "start_date": tx.created_at.strftime('%Y-%m-%d'),
                 "end_date": end_label,
@@ -3597,11 +3598,12 @@ class AdminPaymentsDashboardView(APIView):
         for tx in tx_qs:
             serialized_payments.append({
                 "id": tx.id,
+                # Accounts that were deleted keep anonymous payment records (legal retention).
                 "user": {
                     "id": tx.user.id,
                     "username": tx.user.username,
                     "email": tx.user.user.email
-                },
+                } if tx.user else {"id": None, "username": "Deleted account", "email": ""},
                 "transaction_id": tx.stripe_charge_id or f"TXN-{tx.id}",
                 "amount": str(tx.amount),
                 "plan_name": tx.plan_name,
