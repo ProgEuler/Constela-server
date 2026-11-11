@@ -224,7 +224,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'id', 'user', 'username', 'age', 'height_cm', 'weight_kg', 
             'gender', 'gender_preference', 'looking_for', 'marital_status', 'education_level', 
             'spoken_languages',
-            'city', 'country', 'latitude', 'longitude', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'must_verify_face', 'onboarding_part1_completed',
+            'city', 'country', 'latitude', 'longitude', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'face_verification_note', 'must_verify_face', 'onboarding_part1_completed',
             'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'neurotype_labels',
             'is_neurodivergent', 'open_to_meet_neurodivergent', 'qualities', 
             'interests', 'recharge_methods', 'exhaust_triggers', 
@@ -234,7 +234,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'likes_push', 'messages_push', 'is_dark_mode', 
             'preferred_language', 'is_deactivated', 'photos', 'connection_status', 'name'
         )
-        read_only_fields = ('id', 'user', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'must_verify_face', 'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'photos', 'connection_status', 'name')
+        read_only_fields = ('id', 'user', 'profile_completion_pct', 'is_verified', 'face_verification_status', 'face_verification_note', 'must_verify_face', 'subscription_tier', 'subscription_expires', 'subscription_product_id', 'has_match_analysis', 'photos', 'connection_status', 'name')
 
     def get_name(self, obj):
         return obj.display_name

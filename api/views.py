@@ -2956,7 +2956,7 @@ class AdminVerificationViewSet(APIView):
                     get_cloudinary_url(p.face_selfie_right) if p.face_selfie_right else "",
                 ],
                 "location": f"{p.city}, {p.country}" if p.city and p.country else "Unknown",
-                "submitted_date": p.face_verified_at.strftime('%d %b %Y, %H:%M') if p.face_verified_at else "Recently",
+                "submitted_date": (p.face_submitted_at or p.face_verified_at).strftime('%d %b %Y, %H:%M') if (p.face_submitted_at or p.face_verified_at) else "Recently",
             }
 
         return Response({
@@ -2969,22 +2969,14 @@ class AdminVerificationViewSet(APIView):
         profile = get_object_or_404(UserProfile, id=profile_id)
         action_type = request.data.get('action') # 'approve', 'reject'
         
+        from api.photo_verification import decide
+
         if action_type == 'approve':
-            profile.is_verified = True
-            profile.face_verification_status = 'approved'
-            profile.must_verify_face = False
-            profile.save()
-            
-            # Also mark underlying photos as verified
-            profile.photos.all().update(is_verified=True)
+            decide(profile, approved=True)
             return Response({"message": "Photo verification approved."})
-            
+
         elif action_type == 'reject':
-            profile.is_verified = False
-            profile.face_verification_status = 'rejected'
-            profile.save()
-            # Reject verification
-            profile.photos.all().update(is_verified=False)
+            decide(profile, approved=False, note=request.data.get('reason', ''))
             return Response({"message": "Photo verification rejected."})
             
         return Response({"error": "Invalid action. Use 'approve' or 'reject'."}, status=status.HTTP_400_BAD_REQUEST)
@@ -3760,118 +3752,68 @@ class FaceVerifyView(APIView):
     """
     POST /api/auth/face-verify/
     Requires: Bearer token (authenticated user)
-    Body: multipart/form-data  →  { "selfie": <image file> }
+    Body: multipart/form-data  ->  { "photo": <image file> }
 
-    The app does on-device face detection, then calls this once a clear
-    face is captured. The backend stores the selfie and marks the profile
-    as pending admin review.
-
-    Returns:
-        { "status": "pending", "message": "Selfie submitted. Pending review." }
+    Photo verification: the user takes one live photo of their face in the
+    app. It is stored and the profile goes to "pending" until an admin
+    compares it with the profile pictures and approves or rejects it.
+    (Older app builds send three photos; their "front" photo is used.)
     """
     permission_classes = [permissions.IsAuthenticated]
-    parser_classes_override = None  # DRF handles multipart automatically
 
     def post(self, request):
         profile = request.user.profile
+        photo = request.FILES.get('photo') or request.FILES.get('front')
 
-        front = request.FILES.get('front')
-        left = request.FILES.get('left')
-        right = request.FILES.get('right')
-
-        if not (front and left and right):
-            return Response(
-                {"error": "Please provide front, left, and right verification photos."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # 10 MB size limit for each
-        for f in [front, left, right]:
-            if f.size > 10 * 1024 * 1024:
-                return Response(
-                    {"error": "One or more images are too large. Maximum size is 10 MB each."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        if not photo:
+            return Response({"error": "Please take a verification photo."}, status=status.HTTP_400_BAD_REQUEST)
+        if photo.size > 10 * 1024 * 1024:
+            return Response({"error": "The photo is too large. Maximum size is 10 MB."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             from PIL import Image, ImageOps
             import io
             from django.core.files.base import ContentFile
 
-            # Open and verify
-            img_front = Image.open(front)
-            img_left = Image.open(left)
-            img_right = Image.open(right)
+            Image.open(photo).verify()
+            photo.seek(0)
+            img = ImageOps.exif_transpose(Image.open(photo))  # mobile photos carry rotation in EXIF
 
-            img_front.verify()
-            img_left.verify()
-            img_right.verify()
+            # Normalise to an 1200px-tall JPEG: plenty for a side-by-side review.
+            target_height = 1200
+            if img.size[1] > target_height:
+                ratio = target_height / float(img.size[1])
+                img = img.resize((int(img.size[0] * ratio), target_height), Image.Resampling.LANCZOS)
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            output = io.BytesIO()
+            img.save(output, format='JPEG', quality=88)
 
-            front.seek(0)
-            left.seek(0)
-            right.seek(0)
+            for old in (profile.face_selfie, profile.face_selfie_left, profile.face_selfie_right):
+                if old:
+                    old.delete(save=False)
 
-            # Re-open for processing
-            img_front = Image.open(front)
-            img_left = Image.open(left)
-            img_right = Image.open(right)
-
-            # Auto-rotate based on EXIF data (crucial for mobile photos)
-            img_front = ImageOps.exif_transpose(img_front)
-            img_left = ImageOps.exif_transpose(img_left)
-            img_right = ImageOps.exif_transpose(img_right)
-
-            # Standardize height to 800px
-            target_height = 800
-            def resize_and_convert(img, h):
-                ratio = h / float(img.size[1])
-                w = int((float(img.size[0]) * float(ratio)))
-                resized = img.resize((w, h), Image.Resampling.LANCZOS)
-                if resized.mode in ("RGBA", "P"):
-                    resized = resized.convert("RGB")
-                
-                output = io.BytesIO()
-                resized.save(output, format='JPEG', quality=85)
-                output.seek(0)
-                return output
-
-            front_io = resize_and_convert(img_front, target_height)
-            left_io = resize_and_convert(img_left, target_height)
-            right_io = resize_and_convert(img_right, target_height)
-
-            # Delete previous files if they exist
-            if profile.face_selfie:
-                profile.face_selfie.delete(save=False)
-            if profile.face_selfie_left:
-                profile.face_selfie_left.delete(save=False)
-            if profile.face_selfie_right:
-                profile.face_selfie_right.delete(save=False)
-
-            # Save the individual images
-            uid = request.user.id
-            profile.face_selfie.save(f"verification_{uid}_front.jpg", ContentFile(front_io.read()), save=False)
-            profile.face_selfie_left.save(f"verification_{uid}_left.jpg", ContentFile(left_io.read()), save=False)
-            profile.face_selfie_right.save(f"verification_{uid}_right.jpg", ContentFile(right_io.read()), save=False)
-            
+            profile.face_selfie.save(
+                f"verification_{request.user.id}_{uuid4().hex[:8]}.jpg", ContentFile(output.getvalue()), save=False
+            )
+            profile.face_selfie_left = None
+            profile.face_selfie_right = None
             profile.face_verification_status = 'pending'
-            profile.face_verified_at = None  # Reset until admin approves
+            profile.face_verified_at = None
+            profile.face_submitted_at = timezone.now()
+            profile.face_verification_note = ''
             profile.save(update_fields=[
-                'face_selfie', 'face_selfie_left', 'face_selfie_right', 
-                'face_verification_status', 'face_verified_at'
+                'face_selfie', 'face_selfie_left', 'face_selfie_right', 'face_verification_status',
+                'face_verified_at', 'face_submitted_at', 'face_verification_note',
             ])
-
             return Response(
-                {
-                    "status": "pending",
-                    "message": "Verification photos submitted successfully. Pending review."
-                },
+                {"status": "pending", "message": "Verification photo submitted. Pending review."},
                 status=status.HTTP_200_OK
             )
-
         except Exception as e:
-            print(f"[FACE STITCHING ERROR] {e}")
+            print(f"[PHOTO VERIFICATION ERROR] {e}")
             return Response(
-                {"error": "Failed to process verification photos. Please try again."},
+                {"error": "Failed to process the verification photo. Please try again."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 

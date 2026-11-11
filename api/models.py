@@ -142,6 +142,10 @@ class UserProfile(models.Model):
         default='not_submitted'
     )
     face_verified_at = models.DateTimeField(null=True, blank=True)
+    # Photo verification: when the live photo was submitted, and the admin's
+    # optional reason shown to the user if it is rejected.
+    face_submitted_at = models.DateTimeField(null=True, blank=True)
+    face_verification_note = models.CharField(max_length=255, blank=True, default='')
     must_verify_face = models.BooleanField(default=False)
     onboarding_part1_completed = models.BooleanField(default=False)
 
@@ -650,3 +654,11 @@ class MatchAnalysisPurchase(models.Model):
 
     def __str__(self):
         return f"Match analysis for {self.profile.username} ({self.purchased_at:%Y-%m-%d})"
+
+
+class PhotoVerification(UserProfile):
+    """Admin-only view of profiles for reviewing photo verification submissions."""
+    class Meta:
+        proxy = True
+        verbose_name = 'Photo verification'
+        verbose_name_plural = 'Photo verifications'

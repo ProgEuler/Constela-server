@@ -9,8 +9,14 @@ from api.models import (
     User, UserProfile, UserPhoto, Match, Friendship,
     DirectMessage, ChatRoom, ChatRoomMessage, SupportTicket,
     SupportTicketReply, Report, Block, Transaction, OTPLog, SavedMatch,
-    SubscriptionTierConfig, MatchAnalysisPurchase
+    SubscriptionTierConfig, MatchAnalysisPurchase, PhotoVerification
 )
+from django import forms
+from django.contrib import messages
+from django.shortcuts import redirect
+from django.urls import reverse
+from django.utils.html import format_html_join
+from unfold.decorators import action, display
 
 
 # ──────────────────────────────────────────────────────────────
@@ -392,6 +398,152 @@ class MatchAnalysisPurchaseAdmin(ModelAdmin):
 
 
 # ──────────────────────────────────────────────────────────────
+# PHOTO VERIFICATION (manual review: profile pictures vs live photo)
+# ──────────────────────────────────────────────────────────────
+class PhotoVerificationForm(forms.ModelForm):
+    face_verification_status = forms.ChoiceField(
+        label='Decision',
+        choices=[('pending', 'Pending review'), ('approved', 'Approve — photos match'),
+                 ('rejected', 'Reject — photos do not match')],
+    )
+    face_verification_note = forms.CharField(
+        label='Reason shown to the user (if rejected)', required=False, max_length=255,
+        widget=forms.Textarea(attrs={'rows': 2}),
+    )
+
+    class Meta:
+        model = PhotoVerification
+        fields = ('face_verification_status', 'face_verification_note')
+
+
+class PhotoVerificationAdmin(ModelAdmin):
+    form = PhotoVerificationForm
+    list_display = ('comparison', 'username', 'user_email', 'status', 'face_submitted_at')
+    list_display_links = ('username',)
+    list_filter = ('face_verification_status',)
+    search_fields = ('username', 'user__email')
+    ordering = ('-face_submitted_at',)
+    list_per_page = 25
+    actions = ['approve_selected', 'reject_selected']
+    actions_row = ['approve_row', 'reject_row']
+    actions_detail = ['approve_detail', 'reject_detail']
+    fieldsets = (
+        ('Compare', {'fields': ('comparison_large',)}),
+        ('Account', {'fields': ('user_email', 'city', 'country', 'face_submitted_at', 'face_verified_at')}),
+        ('Decision', {'fields': ('face_verification_status', 'face_verification_note')}),
+    )
+    readonly_fields = ('comparison_large', 'user_email', 'city', 'country', 'face_submitted_at', 'face_verified_at')
+
+    def get_queryset(self, request):
+        return (super().get_queryset(request)
+                .exclude(face_selfie='').exclude(face_selfie__isnull=True)
+                .select_related('user').prefetch_related('photos'))
+
+    def changelist_view(self, request, extra_context=None):
+        # Open on the review queue by default.
+        if not request.GET and request.method == 'GET':
+            return redirect(f"{request.path}?face_verification_status__exact=pending")
+        return super().changelist_view(request, extra_context)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    # ── display ──
+    @staticmethod
+    def _profile_images(obj, height):
+        photos = sorted(obj.photos.all(), key=lambda p: (not p.is_main, p.uploaded_at))
+        return [image_tag(p.image, height=height) for p in photos] or ['—']
+
+    def comparison(self, obj):
+        profile_imgs = self._profile_images(obj, 72)[:3]
+        return format_html(
+            '<div style="display:flex;gap:16px;align-items:flex-start">'
+            '<div><div style="font-size:11px;opacity:.7;margin-bottom:4px">Profile pictures</div>'
+            '<div style="display:flex;gap:6px">{}</div></div>'
+            '<div style="border-left:2px solid #DE4177;padding-left:16px">'
+            '<div style="font-size:11px;opacity:.7;margin-bottom:4px">Verification photo</div>{}</div>'
+            '</div>',
+            format_html_join('', '{}', ((img,) for img in profile_imgs)),
+            image_tag(obj.face_selfie, height=72),
+        )
+    comparison.short_description = 'Profile vs verification'
+
+    def comparison_large(self, obj):
+        return format_html(
+            '<div style="display:flex;gap:32px;flex-wrap:wrap;align-items:flex-start">'
+            '<div><div style="font-weight:600;margin-bottom:8px">Profile pictures</div>'
+            '<div style="display:flex;gap:10px;flex-wrap:wrap;max-width:620px">{}</div></div>'
+            '<div><div style="font-weight:600;margin-bottom:8px;color:#DE4177">Live verification photo</div>{}</div>'
+            '</div>',
+            format_html_join('', '{}', ((img,) for img in self._profile_images(obj, 280))),
+            image_tag(obj.face_selfie, height=360),
+        )
+    comparison_large.short_description = ''
+
+    def user_email(self, obj):
+        return obj.user.email
+    user_email.short_description = 'Email'
+
+    @display(description='Status', label={'pending': 'warning', 'approved': 'success', 'rejected': 'danger'})
+    def status(self, obj):
+        return obj.face_verification_status
+
+    # ── decisions ──
+    def save_model(self, request, obj, form, change):
+        from api.photo_verification import decide
+        decision = form.cleaned_data.get('face_verification_status')
+        note = form.cleaned_data.get('face_verification_note', '')
+        if change and 'face_verification_status' in form.changed_data and decision in ('approved', 'rejected'):
+            decide(obj, approved=decision == 'approved', note=note)
+        else:
+            super().save_model(request, obj, form, change)
+
+    def _decide(self, request, object_id, approved):
+        from api.photo_verification import decide
+        profile = PhotoVerification.objects.get(pk=object_id)
+        decide(profile, approved=approved)
+        messages.success(request, f"{profile.username}: {'approved' if approved else 'rejected'}.")
+        return redirect(request.headers.get('referer') or reverse('admin:api_photoverification_changelist'))
+
+    @action(description='Approve', icon='check_circle')
+    def approve_row(self, request, object_id):
+        return self._decide(request, object_id, True)
+
+    @action(description='Reject', icon='cancel')
+    def reject_row(self, request, object_id):
+        return self._decide(request, object_id, False)
+
+    @action(description='Approve', icon='check_circle')
+    def approve_detail(self, request, object_id):
+        return self._decide(request, object_id, True)
+
+    @action(description='Reject', icon='cancel')
+    def reject_detail(self, request, object_id):
+        return self._decide(request, object_id, False)
+
+    @admin.action(description='Approve selected')
+    def approve_selected(self, request, queryset):
+        from api.photo_verification import decide
+        count = 0
+        for profile in queryset:
+            decide(profile, approved=True)
+            count += 1
+        messages.success(request, f'Approved {count} verification(s).')
+
+    @admin.action(description='Reject selected')
+    def reject_selected(self, request, queryset):
+        from api.photo_verification import decide
+        count = 0
+        for profile in queryset:
+            decide(profile, approved=False)
+            count += 1
+        messages.success(request, f'Rejected {count} verification(s).')
+
+
+# ──────────────────────────────────────────────────────────────
 # REGISTRATIONS
 # ──────────────────────────────────────────────────────────────
 admin.site.register(User, CustomUserAdmin)
@@ -411,6 +563,7 @@ admin.site.register(OTPLog, OTPLogAdmin)
 admin.site.register(SavedMatch, SavedMatchAdmin)
 admin.site.register(SubscriptionTierConfig, SubscriptionTierConfigAdmin)
 admin.site.register(MatchAnalysisPurchase, MatchAnalysisPurchaseAdmin)
+admin.site.register(PhotoVerification, PhotoVerificationAdmin)
 
 
 # Re-register Group with Unfold styling

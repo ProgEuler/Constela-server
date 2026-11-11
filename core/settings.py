@@ -300,6 +300,8 @@ UNFOLD = {
                     _admin_link('Users', 'person', 'api_user'),
                     _admin_link('Profiles', 'badge', 'api_userprofile'),
                     _admin_link('Photos', 'photo_library', 'api_userphoto'),
+                    {**_admin_link('Photo Verifications', 'verified_user', 'api_photoverification'),
+                     'badge': 'api.photo_verification.pending_badge'},
                     _admin_link('Groups', 'group', 'auth_group'),
                 ],
             },
