@@ -9,6 +9,7 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 
 logger = logging.getLogger(__name__)
+ANDROID_CHANNEL_ID = 'constela_default'
 _push_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="fcm")
 
 # FCM errors that mean the token will never work again (app uninstalled, token rotated, wrong project).
@@ -65,7 +66,13 @@ def send_fcm_push(
         messaging.Message(
             notification=messaging.Notification(title=title, body=body),
             data=payload or None,
-            android=messaging.AndroidConfig(priority='high'),
+            # Channel created by the app (plugins/withAndroidNotifications.js): high importance → banners.
+            android=messaging.AndroidConfig(
+                priority='high',
+                notification=messaging.AndroidNotification(
+                    channel_id=ANDROID_CHANNEL_ID, color='#DE4177', sound='default',
+                ),
+            ),
             apns=messaging.APNSConfig(payload=messaging.APNSPayload(aps=messaging.Aps(sound='default'))),
             token=token,
         )
